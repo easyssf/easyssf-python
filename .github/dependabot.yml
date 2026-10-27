@@ -1,0 +1,33 @@
+# Dependabot keeps the GitHub Actions, the Python dependencies of the uv workspace (uv.lock) and
+# the Keycloak image of the examples current. Minor and patch updates arrive grouped, one pull
+# request per ecosystem and week; major updates come on their own, as they may need a look.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # the receiver stays below FastAPI 1.0 on purpose until the integration was checked against it
+      - dependency-name: fastapi
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker-compose
+    directory: /examples/keycloak
+    schedule:
+      interval: weekly
+      day: monday
