@@ -1,0 +1,87 @@
+[project]
+name = "easyssf-python"
+version = "0.6.0"
+description = "Workspace root of easyssf for Python: not published, see the packages"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = [
+    "easyssf-core",
+    "easyssf-receiver",
+    "easyssf-test",
+    "easyssf-conformance",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+    "easyssf-core",
+    "easyssf-receiver",
+    "easyssf-test",
+    "conformance",
+]
+
+[tool.uv.sources]
+easyssf-core = { workspace = true }
+easyssf-receiver = { workspace = true }
+easyssf-test = { workspace = true }
+easyssf-conformance = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9,<10",
+    "pytest-asyncio>=1.4,<2",
+    "pytest-timeout>=2.3",
+    "ruff>=0.17",
+    "mypy>=2.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["easyssf-core/tests", "easyssf-receiver/tests", "easyssf-test/tests", "conformance/tests"]
+addopts = "--import-mode=importlib"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 120
+filterwarnings = [
+    "error::DeprecationWarning:easyssf.*",
+    "ignore:EdDSA is deprecated:joserfc.errors.SecurityWarning",
+    "ignore:Key size should be:joserfc.errors.SecurityWarning",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["easyssf-core/src", "easyssf-receiver/src", "easyssf-test/src", "conformance/src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "ASYNC", "S", "N", "PL", "D"]
+ignore = [
+    "D100", "D104", "D105", "D107",      # module, package, magic method and __init__ docstrings
+    "D203", "D213",                      # one convention: D211 and D212
+    "D200", "D205", "D209", "D400", "D401", "D415",  # a summary may wrap over lines, as in the Go port
+    "PLR0913", "PLR0912", "PLR0915", "PLR2004", "PLR0911",  # protocol code is branchy
+    "S101",                              # asserts in tests
+    "RUF012",
+    "PLC0415",                           # imports inside functions keep optional dependencies optional
+    "ASYNC109",                          # eventually(timeout=) is the name the other ports use
+]
+
+[tool.ruff.lint.per-file-ignores]
+"*/tests/*" = ["D", "S", "PLR", "ASYNC", "SIM117", "E501"]
+"conformance/**" = ["S"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "easyssf-core/src:easyssf-receiver/src:easyssf-test/src:conformance/src"
+namespace_packages = true
+explicit_package_bases = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["testcontainers.*", "docker.*"]
+ignore_missing_imports = true

@@ -1,0 +1,43 @@
+[project]
+name = "easyssf-receiver"
+version = "0.6.0"
+description = "An SSF receiver for Python, framework independent: SET verification, push and poll delivery, stream management, typed CAEP, RISC and SCIM handlers, token revocation and session termination"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "the easyssf authors" }]
+keywords = ["ssf", "caep", "risc", "openid", "security-events", "receiver"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+dependencies = [
+    "easyssf-core",
+    "joserfc>=1.7,<2",
+    "httpx>=0.28,<1",
+]
+
+[project.urls]
+Homepage = "https://easyssf.org"
+Repository = "https://github.com/easyssf/easyssf-python"
+Changelog = "https://github.com/easyssf/easyssf-python/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/easyssf"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "README.md", "tests"]
+
+[tool.uv.sources]
+easyssf-core = { workspace = true }
+
+[dependency-groups]
+dev = ["easyssf-test"]

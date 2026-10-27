@@ -1,0 +1,36 @@
+[project]
+name = "easyssf-core"
+version = "0.6.0"
+description = "The vocabulary of the OpenID Shared Signals Framework: SETs, subjects, event types, the typed CAEP, RISC and SCIM events, stream configuration and transmitter metadata"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "the easyssf authors" }]
+keywords = ["ssf", "caep", "risc", "openid", "security-events", "set"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+signing = ["joserfc>=1.7,<2"]
+
+[project.urls]
+Homepage = "https://easyssf.org"
+Repository = "https://github.com/easyssf/easyssf-python"
+Changelog = "https://github.com/easyssf/easyssf-python/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/easyssf"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "README.md", "tests"]

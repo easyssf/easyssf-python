@@ -1,0 +1,27 @@
+{
+  "alias": "easyssf-receiver-ssf1_0-caepiop1_0-poll",
+  "description": "easyssf receiver: SSF 1.0 + CAEP Interop Profile 1.0, poll delivery",
+  "ssf": {
+    "stream": {
+      "audience": "https://local.easyssf.org/receiver"
+    },
+    "subjects": {
+      "valid": [
+        {
+          "format": "email",
+          "email": "foo@example.com"
+        },
+        {
+          "format": "iss_sub",
+          "iss": "https://idp.example.com",
+          "sub": "1234"
+        }
+      ]
+    }
+  },
+  "client": {
+    "client_id": "easyssf-receiver",
+    "client_secret": "easyssf-receiver-secret",
+    "scope": "ssf.read ssf.manage"
+  }
+}
