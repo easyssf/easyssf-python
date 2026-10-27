@@ -1,0 +1,36 @@
+[project]
+name = "example-fastapi-resource-server"
+version = "0.6.0"
+description = "An OAuth2 resource server on FastAPI that rejects access tokens once their Keycloak session was revoked; the port of the Spring Boot example, not published"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+dependencies = [
+    "easyssf-receiver",
+    "easyssf-receiver-fastapi",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34",
+    "joserfc>=1.7,<2",
+    "httpx>=0.28,<1",
+    "pyyaml>=6",
+]
+
+[project.scripts]
+resource-server = "resource_server.main:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/resource_server"]
+
+[tool.uv]
+package = true
+
+[tool.uv.sources]
+easyssf-receiver = { workspace = true }
+easyssf-receiver-fastapi = { workspace = true }
+easyssf-test = { workspace = true }
+
+[dependency-groups]
+dev = ["easyssf-test"]

@@ -8,7 +8,9 @@ dependencies = [
     "easyssf-core",
     "easyssf-receiver",
     "easyssf-test",
+    "easyssf-receiver-fastapi",
     "easyssf-conformance",
+    "example-fastapi-resource-server",
 ]
 
 [tool.uv]
@@ -19,14 +21,18 @@ members = [
     "easyssf-core",
     "easyssf-receiver",
     "easyssf-test",
+    "easyssf-receiver-fastapi",
     "conformance",
+    "examples/fastapi/resource-server",
 ]
 
 [tool.uv.sources]
 easyssf-core = { workspace = true }
 easyssf-receiver = { workspace = true }
 easyssf-test = { workspace = true }
+easyssf-receiver-fastapi = { workspace = true }
 easyssf-conformance = { workspace = true }
+example-fastapi-resource-server = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -38,7 +44,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["easyssf-core/tests", "easyssf-receiver/tests", "easyssf-test/tests", "conformance/tests"]
+testpaths = ["easyssf-core/tests", "easyssf-receiver/tests", "easyssf-test/tests", "easyssf-receiver-fastapi/tests", "conformance/tests", "examples/fastapi/resource-server/tests"]
 addopts = "--import-mode=importlib"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
@@ -52,7 +58,7 @@ filterwarnings = [
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-src = ["easyssf-core/src", "easyssf-receiver/src", "easyssf-test/src", "conformance/src"]
+src = ["easyssf-core/src", "easyssf-receiver/src", "easyssf-test/src", "easyssf-receiver-fastapi/src", "conformance/src", "examples/fastapi/resource-server/src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "ASYNC", "S", "N", "PL", "D"]
@@ -70,6 +76,12 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "*/tests/*" = ["D", "S", "PLR", "ASYNC", "SIM117", "E501"]
 "conformance/**" = ["S"]
+"examples/**" = ["S"]
+
+[tool.ruff.lint.isort]
+# easyssf is a namespace package: without this, ruff takes "fastapi" of easyssf/fastapi for the
+# first-party package and sorts the framework's imports with ours
+known-third-party = ["fastapi", "starlette"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -77,7 +89,7 @@ convention = "google"
 [tool.mypy]
 python_version = "3.11"
 strict = true
-mypy_path = "easyssf-core/src:easyssf-receiver/src:easyssf-test/src:conformance/src"
+mypy_path = "easyssf-core/src:easyssf-receiver/src:easyssf-test/src:easyssf-receiver-fastapi/src:conformance/src:examples/fastapi/resource-server/src"
 namespace_packages = true
 explicit_package_bases = true
 warn_unreachable = true

@@ -31,9 +31,10 @@ Distributions, in dependency order:
 | `easyssf-receiver` | `easyssf.receiver` | The receiver: verification, de-duplication, push and poll, stream management, typed handlers, revocation, session termination, metrics, `ReceiverConfig`, `Transmitter`, `Receiver`; `easyssf.receiver.asgi` and `.wsgi` mount the push endpoint on any framework | Go `receiver` | core, joserfc, httpx |
 | `easyssf-test` | `easyssf.testing` | `TestTransmitter`: signs SETs, serves metadata and JWK Set, issues tokens, emulates stream management and the poll endpoint, in-process through an `httpx` transport; `eventually`, `during`, `ManualClock`, signing helpers | Go `ssftest` | core, joserfc, httpx |
 | `easyssf-receiver-sqlalchemy` (later) | `easyssf.sqlalchemy` | The three tables shared with Java, Go, .NET and Rust, on SQLAlchemy 2 (sync and async engines) | Go `receiver/sqlstore` | receiver, sqlalchemy |
-| `easyssf-receiver-flask`, `-fastapi`, `-litestar` (later) | `easyssf.flask`, `easyssf.fastapi`, `easyssf.litestar` | The push route, the revocation middleware / dependency / guard, the lifecycle hooks of each framework | Rust `easyssf-receiver-axum` / `-actix-web` | receiver, the framework |
+| `easyssf-receiver-fastapi` | `easyssf.fastapi` | `push_router` / `push_router_for` (the push endpoint as an `APIRouter`), `revocation_dependency` for `Depends` and the ASGI `RevocationMiddleware`, `receiver_lifespan` for `FastAPI(lifespan=...)`, `health_router` | Rust `easyssf-receiver-axum` | receiver, fastapi |
+| `easyssf-receiver-flask`, `-litestar` (later) | `easyssf.flask`, `easyssf.litestar` | The push route, the revocation middleware / guard, the lifecycle hooks of each framework | Rust `easyssf-receiver-axum` / `-actix-web` | receiver, the framework |
 | `conformance/` (`easyssf-conformance`, not published) | `easyssf.conformance` | The OpenID conformance suite started with testcontainers-python, the receiver under test that plays the scenarios, the four plan tests (`EASYSSF_CONFORMANCE_TESTS=true`) and the `cts` script for manual runs | Go `conformance` | receiver, test, testcontainers, uvicorn |
-| `examples/*` (later) | | The ports of the Spring Boot examples and the Keycloak compose setup, not published | Go `examples` | |
+| `examples/*` (`example-fastapi-resource-server`, not published) | `resource_server` | `examples/fastapi/resource-server`: the OAuth2 resource server on FastAPI that rejects access tokens once their Keycloak session was revoked (`config.py` the receiver configuration, `auth.py` the access token validation, `main.py` the app and the `resource-server` script); `examples/keycloak` the compose setup with the `ssf-demo` realm shared with the other repositories; the OIDC client and SCIM provisioning examples are not ported yet | Go `examples/resource-server` | receiver, fastapi, uvicorn |
 
 New protocol behaviour goes into `easyssf-receiver`, new vocabulary into `easyssf-core`, framework
 code only into the framework distributions, database code into `easyssf-receiver-sqlalchemy`.
@@ -45,7 +46,7 @@ uv sync --all-packages                        # the workspace with every member 
 uv run pytest                                 # everything, in-process, no network, no Docker
 uv run pytest easyssf-receiver/tests/test_verifier.py -k rejects   # one file, the negative tests
 uv run ruff check . && uv run ruff format --check .   # CI fails on either
-uv run mypy easyssf-core/src easyssf-receiver/src easyssf-test/src conformance/src
+uv run mypy easyssf-core/src easyssf-receiver/src easyssf-test/src easyssf-receiver-fastapi/src conformance/src examples/fastapi/resource-server/src
 cd conformance && EASYSSF_CONFORMANCE_TESTS=true uv run pytest tests/test_plans.py -v   # the suite in Docker, minutes per plan
 ```
 

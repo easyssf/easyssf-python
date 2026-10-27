@@ -1,0 +1,80 @@
+# The curl walk-through of examples/README.md as requests for the HTTP client of IntelliJ IDEA
+# (and VS Code's REST Client): log in at Keycloak, call the API, end the session in Keycloak,
+# call the API again and watch the access token being rejected within seconds. Run them in order;
+# the response handlers keep the tokens in client.global.
+#
+# Needs the Keycloak of examples/keycloak (docker compose up) and `uv run resource-server`
+# (or `uv run resource-server --poll`). The hosts come from http-client.env.json, environment
+# "local".
+
+### 1. Log in as tester with the public client example-cli (password grant)
+# @name login
+POST {{keycloak}}/realms/ssf-demo/protocol/openid-connect/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=password&client_id=example-cli&username=tester&password=test
+
+> {%
+    client.test("tokens issued", function () {
+        client.assert(response.status === 200, "expected 200, got " + response.status);
+    });
+    client.global.set("access_token", response.body.access_token);
+    client.global.set("refresh_token", response.body.refresh_token);
+%}
+
+### 2. Call the API with the access token: 200 with the user of the token
+GET {{api}}/api/me
+Authorization: Bearer {{access_token}}
+
+> {%
+    client.test("the token is accepted", function () {
+        client.assert(response.status === 200, "expected 200, got " + response.status);
+        client.assert(response.body.username === "tester", "expected tester");
+    });
+%}
+
+### 3. The health of the receiver: its transmitter, stream and (with --poll) poller
+GET {{api}}/health
+
+> {%
+    client.test("the receiver is healthy", function () {
+        client.assert(response.status === 200, "expected 200, got " + response.status);
+        client.assert(response.body.transmitters[0].streamRegistration === "registered", "stream not registered");
+    });
+%}
+
+### 4. End the session in Keycloak: it sends a CAEP session-revoked SET to the receiver
+POST {{keycloak}}/realms/ssf-demo/protocol/openid-connect/logout
+Content-Type: application/x-www-form-urlencoded
+
+client_id=example-cli&refresh_token={{refresh_token}}
+
+> {%
+    client.test("logged out", function () {
+        client.assert(response.status === 204, "expected 204, got " + response.status);
+    });
+%}
+
+### 5. Call the API again, a few seconds later: the access token has not expired but is rejected
+# (401, WWW-Authenticate: Bearer error="invalid_token", error_description="The token was revoked")
+GET {{api}}/api/me
+Authorization: Bearer {{access_token}}
+
+> {%
+    client.test("the revoked token is rejected", function () {
+        client.assert(response.status === 401, "expected 401, got " + response.status + " (Keycloak delivers within ~2 s, try again)");
+        client.assert(/revoked/.test(response.headers.valueOf("WWW-Authenticate")), "expected the revoked challenge");
+    });
+%}
+
+### 6. Without a token: 401 with a plain Bearer challenge
+GET {{api}}/api/me
+
+### 7. The push endpoint the transmitter delivers to: a SET that is not from Keycloak is rejected
+# with an RFC 8935 error document; without the Authorization header the stream was registered
+# with it is 401
+POST {{api}}/ssf/push
+Content-Type: application/secevent+jwt
+Authorization: Bearer example-resource-server-push-secret
+
+not-a-set

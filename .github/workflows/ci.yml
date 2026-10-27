@@ -36,7 +36,7 @@ jobs:
       - run: uv sync --all-packages
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run mypy easyssf-core/src easyssf-receiver/src easyssf-test/src conformance/src
+      - run: uv run mypy easyssf-core/src easyssf-receiver/src easyssf-test/src easyssf-receiver-fastapi/src conformance/src examples/fastapi/resource-server/src
 
   build:
     name: Build the distributions

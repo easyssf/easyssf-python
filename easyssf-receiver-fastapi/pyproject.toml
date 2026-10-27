@@ -1,0 +1,44 @@
+[project]
+name = "easyssf-receiver-fastapi"
+version = "0.6.0"
+description = "The easyssf SSF receiver for FastAPI: the push endpoint, the rejection of revoked access tokens and the receiver's lifecycle"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "the easyssf authors" }]
+keywords = ["ssf", "caep", "risc", "openid", "security-events", "fastapi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Framework :: FastAPI",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+dependencies = [
+    "easyssf-receiver",
+    "fastapi>=0.115,<1",
+]
+
+[project.urls]
+Homepage = "https://easyssf.org"
+Repository = "https://github.com/easyssf/easyssf-python"
+Changelog = "https://github.com/easyssf/easyssf-python/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/easyssf"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "README.md", "tests"]
+
+[tool.uv.sources]
+easyssf-receiver = { workspace = true }
+easyssf-test = { workspace = true }
+
+[dependency-groups]
+dev = ["easyssf-test", "itsdangerous>=2.2"]
