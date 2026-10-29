@@ -13,22 +13,37 @@ database tables and their configuration keys.
 
 **Turn a Python application into an SSF receiver without implementing SET validation, metadata
 discovery, PUSH and POLL delivery, stream management and replay protection yourself.** Reacting to
-a security event is a function:
+a security event is a function. On FastAPI (`pip install easyssf-receiver-fastapi`), this is a
+complete receiver, `uvicorn main:app`:
 
 ```python
-from easyssf.receiver import Receiver, ReceiverConfig, for_event
+# main.py
+from fastapi import FastAPI
+
+from easyssf.fastapi import push_router_for, receiver_lifespan
+from easyssf.receiver import EventContext, Receiver, ReceiverConfig, for_event
 
 
-async def session_revoked(event):
+async def session_revoked(event: EventContext) -> None:
     subject = event.subject
     ...  # end what you hold for subject.session_id or subject.sub
 
 
-config = ReceiverConfig.from_mapping(settings["easyssf"]["receiver"])
+config = ReceiverConfig.from_mapping(
+    {
+        "transmitter-issuer": "https://idp.example/realms/demo",
+        "expected-audience": "https://my-app.example",
+        "push": {"expected-auth-header": "Bearer s3cr3t"},  # what the transmitter was told to send
+    }
+)
 receiver = Receiver(config, handlers=[for_event("CaepSessionRevoked", session_revoked)])
-await receiver.start()  # registers the stream, starts polling
-app.mount(receiver.push_endpoint_path, push_app(receiver.push_handler))  # POST /ssf/push
+app = FastAPI(lifespan=receiver_lifespan(receiver))  # starts and stops the receiver with the app
+app.include_router(push_router_for(receiver))  # POST /ssf/push
 ```
+
+The same on any other framework: `await receiver.start()` when the application starts,
+`await receiver.aclose()` when it stops, and the ASGI app `easyssf.receiver.asgi.push_app(receiver.push_handler)`
+(or `easyssf.receiver.wsgi.push_wsgi_app`) mounted at `receiver.push_endpoint_path`.
 
 Version 0.6.0 is at feature parity with [easyssf 0.6.0 for Java](https://github.com/easyssf/easyssf);
 the version follows the Java library, and below 1.0 a release may break the API when the
@@ -104,7 +119,11 @@ uv add easyssf-receiver            # or: pip install easyssf-receiver
 
 The configuration keys are those of the Spring Boot starter and the .NET options, in kebab-case
 (snake_case is accepted too), under `easyssf.receiver`; `ReceiverConfig.from_mapping` reads them
-from any mapping, a parsed YAML, TOML or JSON file, with durations as `"30s"` or `"24h"`:
+from any mapping, a parsed YAML, TOML or JSON file, with durations as `"30s"` or `"24h"`. A key
+the receiver does not know is a configuration error that names the key it resembles (a typo in
+`push.expected-auth-header` would otherwise leave the push endpoint without the header it
+expects); `from_mapping(..., strict=False)` ignores unknown keys, as the Spring Boot, .NET and Go
+bindings do:
 
 ```yaml
 easyssf:
@@ -129,7 +148,7 @@ receiver = Receiver(config, handlers=[for_event("CaepCredentialChange", credenti
 
 await receiver.start()  # registers the stream, starts polling
 ...
-await receiver.stop()  # sends the acknowledgements it owes
+await receiver.aclose()  # stops (sends the acknowledgements it owes) and closes its own HTTP client
 
 push = push_app(receiver.push_handler)  # an ASGI app for POST /ssf/push
 
@@ -153,7 +172,11 @@ api = RevocationMiddleware(api, receiver.token_revocation_store, token_claims)
 health = await receiver.health()  # HEALTHY, DEGRADED or UNHEALTHY, per transmitter
 ```
 
-`Receiver` is also an async context manager (`async with receiver:` starts and stops it). The
+`Receiver` is also an async context manager (`async with receiver:` starts it and closes it on
+exit). `stop()` ends the background work and leaves the receiver ready for another `start()`;
+`aclose()` stops it and closes the `httpx.AsyncClient` it made for itself (a client given as
+`http_client=` is yours and stays open), after which it cannot start again. When a transmitter
+fails to start, the ones started before it are stopped again and `start()` can be tried again. The
 handlers may be `async def` or plain functions (which run in a worker thread), or objects with an
 `async handle(context)` method; `for_event` filters by event type, alias or URI.
 
@@ -389,6 +412,31 @@ by default. `easyssf-receiver-sqlalchemy` will keep them in the database of the 
 the tables of the Java library (`EASYSSF_PROCESSED_SET`, `EASYSSF_REVOCATION`, `EASYSSF_POLL_ACK`),
 so that a SET pushed to one instance is handled once and acknowledged by whichever instance polls
 next; until then, implement the three protocols over your own data access.
+
+Several Uvicorn or Gunicorn workers (`uvicorn --workers 4`, `gunicorn -k uvicorn.workers.UvicornWorker`)
+are several instances: each process builds its own `Receiver`, and the in-memory stores are not
+shared between them. What that means, per feature:
+
+- **Push.** The transmitter's request reaches one worker, which verifies and handles the SET. A
+  redelivery may reach another worker, whose in-memory `JtiDedupStore` does not know the `jti`:
+  the handlers run again. Handlers are idempotent for this reason; a shared store makes the
+  second delivery a no-op.
+- **Revocation.** A `TokenRevocationStore` in memory revokes tokens only on the worker that
+  received the SET; the other workers keep accepting them. Share the store, or run one worker, when
+  revocation matters.
+- **Stream registration.** Every worker runs a `StreamRegistrar`. With `stream.management: receiver`
+  each looks the stream up by the receiver's audience and finds the one the first worker
+  registered, so one stream results; `delete-on-shutdown` then deletes it when the first worker
+  stops. Prefer a stream managed on the transmitter (`stream.management: transmitter`) with several
+  workers, or let one process own the stream.
+- **Polling.** Every worker polls the same stream. The transmitter hands a SET to one poll request,
+  so each SET is handled once, but the acknowledgements and the de-duplication of redeliveries
+  live in the worker that polled. With in-memory stores, run the poller in one process (a
+  dedicated worker, or a separate process that only polls) or share the `PollAckStore` and
+  `JtiDedupStore`.
+
+The simplest robust layouts are one worker per host behind a load balancer with shared stores, or
+a single process that polls next to the web workers that serve the push endpoint.
 
 ## Testing your receiver
 

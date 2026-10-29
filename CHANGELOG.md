@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Changed
+
+- `ReceiverConfig.from_mapping` reports a key it does not know as a configuration failure, with
+  the key it resembles (`push.expected-auth-headers: unknown setting, did you mean
+  'expected-auth-header'?`), instead of ignoring it silently as the Spring Boot, .NET and Go
+  bindings do; `from_mapping(..., strict=False)` restores that behaviour.
+- `Receiver` owns the HTTP clients it makes itself: `Receiver.aclose()` stops the receiver and
+  closes the `httpx.AsyncClient` it created when none was given, and the one that adds the
+  configured `user-agent`; a client given as `http_client=` stays open. `async with receiver:`
+  and `receiver_lifespan` close the receiver on exit; `stop()` alone leaves it ready for another
+  `start()`. `Receiver.closed` tells, and `start()` on a closed receiver raises `RuntimeError`.
+- `Receiver.start()` rolls back when a transmitter fails to start: the transmitters started before
+  it are stopped again and the receiver is left stopped, so that `start()` can be tried again
+  instead of doing nothing.
+- The distributions pin each other to the `0.6` series (`easyssf-core>=0.6,<0.7`,
+  `easyssf-receiver>=0.6,<0.7`), and CI installs the built wheels in a clean environment.
+
+### Fixed
+
+- `UriPolicy.is_loopback` took any host that starts with `127.` for a loopback address, so that
+  `http://127.attacker.example/` was exempt from the https requirement; it now uses the parsed IP
+  address (`127.0.0.0/8`, `::1`) and the `localhost` names only.
+- The ASGI push app and the FastAPI push router buffer no more than one byte beyond
+  `MAX_SET_SIZE` of a request body, whatever the size of the chunks the server hands over; before,
+  one large chunk was appended in full before the limit was checked.
+
 ### Added
 
 - The port of easyssf 0.6.0 for Java to Python, after the Go, .NET and Rust ports: `easyssf-core`

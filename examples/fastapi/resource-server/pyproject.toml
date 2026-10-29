@@ -5,8 +5,8 @@ description = "An OAuth2 resource server on FastAPI that rejects access tokens o
 requires-python = ">=3.11"
 license = "Apache-2.0"
 dependencies = [
-    "easyssf-receiver",
-    "easyssf-receiver-fastapi",
+    "easyssf-receiver>=0.6,<0.7",
+    "easyssf-receiver-fastapi>=0.6,<0.7",
     "fastapi>=0.115,<1",
     "uvicorn>=0.34",
     "joserfc>=1.7,<2",

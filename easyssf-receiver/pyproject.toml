@@ -16,7 +16,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "easyssf-core",
+    "easyssf-core>=0.6,<0.7",
     "joserfc>=1.7,<2",
     "httpx>=0.28,<1",
 ]

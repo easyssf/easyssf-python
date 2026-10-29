@@ -8,6 +8,7 @@ without changing anything. Durations are ``timedelta`` values bound from ``"30s"
 
 from __future__ import annotations
 
+import difflib
 import re
 import typing
 from collections.abc import Mapping
@@ -585,18 +586,26 @@ class ReceiverConfig(TransmitterConfig):
     data: DataConfig = field(default_factory=DataConfig)
     """The database stores, when the application uses them."""
     binding_failures: list[str] = field(default_factory=list, repr=False, compare=False, metadata={"internal": True})
-    """What :meth:`from_mapping` could not bind because a value had the wrong type, reported by
-    :meth:`validate`; empty for a configuration built in code."""
+    """What :meth:`from_mapping` could not bind, a value of the wrong type or a key it does not
+    know, reported by :meth:`validate`; empty for a configuration built in code."""
 
     @classmethod
-    def from_mapping(cls, mapping: Mapping[str, Any]) -> ReceiverConfig:
+    def from_mapping(cls, mapping: Mapping[str, Any], *, strict: bool = True) -> ReceiverConfig:
         """Binds the configuration from the mapping under ``easyssf.receiver`` of a parsed YAML,
         TOML or JSON file: kebab-case keys (snake_case is accepted too), nested mappings for the
-        sections, durations as ``"30s"``, ``"24h"`` or seconds. Unknown keys are ignored, as the
-        JSON binding of the Go port does; a value of the wrong type keeps the default and is
-        reported by :meth:`validate`, so that no exception escapes here."""
+        sections, durations as ``"30s"``, ``"24h"`` or seconds. Nothing is raised here: a value
+        of the wrong type keeps the default, and it is reported by :meth:`validate` with its key.
+
+        Args:
+            mapping: the settings under ``easyssf.receiver``.
+            strict: whether a key the configuration does not know is a failure too, as a typo in
+                ``push.expected-auth-header`` would otherwise leave the push endpoint without the
+                header it expects; :meth:`validate` reports it with the key it resembles. ``False``
+                ignores unknown keys, as the Spring Boot, .NET and Go bindings do, for a mapping
+                that carries settings of other software.
+        """
         failures: list[str] = []
-        config = _bind(cls, mapping, CONFIGURATION_SECTION, failures)
+        config = _bind(cls, mapping, CONFIGURATION_SECTION, failures, strict)
         config.binding_failures = failures
         return config
 
@@ -765,12 +774,17 @@ def _check_endpoint(value: str, description: str, allow_insecure_http: bool) -> 
 _T = TypeVar("_T")
 
 
-def _bind(cls: type[_T], mapping: Mapping[str, Any], prefix: str, failures: list[str]) -> _T:
+def _bind(cls: type[_T], mapping: Mapping[str, Any], prefix: str, failures: list[str], strict: bool) -> _T:
     """A dataclass bound from the mapping: every field from the kebab-case (or snake_case) key of
     its name, the defaults where the mapping has no value, a failure where it has one of the wrong
-    type."""
+    type and, when strict, where it has a key that is no field."""
     values = {str(key).replace("_", "-"): value for key, value in mapping.items()}
     hints = typing.get_type_hints(cls)
+    known = [f.name.replace("_", "-") for f in fields(cls) if not f.metadata.get("internal")]  # type: ignore[arg-type]
+    if strict:
+        for key in values:
+            if key not in known:
+                failures.append(f"{prefix}.{key}: unknown setting{_did_you_mean(key, known)}")
     arguments: dict[str, Any] = {}
     for f in fields(cls):  # type: ignore[arg-type]
         if f.metadata.get("internal"):
@@ -778,16 +792,23 @@ def _bind(cls: type[_T], mapping: Mapping[str, Any], prefix: str, failures: list
         key = f.name.replace("_", "-")
         if key not in values or values[key] is None:
             continue
-        bound = _bind_value(hints[f.name], values[key], f"{prefix}.{key}", failures)
+        bound = _bind_value(hints[f.name], values[key], f"{prefix}.{key}", failures, strict)
         if bound is not _UNBOUND:
             arguments[f.name] = bound
     return cls(**arguments)
 
 
+def _did_you_mean(key: str, known: list[str]) -> str:
+    """``", did you mean 'expected-auth-header'?"`` for the known key the given one resembles,
+    ``""`` when none does."""
+    matches = difflib.get_close_matches(key, known, n=1, cutoff=0.6)
+    return f", did you mean '{matches[0]}'?" if matches else ""
+
+
 _UNBOUND: Final = object()
 
 
-def _bind_value(hint: Any, value: Any, key: str, failures: list[str]) -> Any:
+def _bind_value(hint: Any, value: Any, key: str, failures: list[str], strict: bool) -> Any:
     origin = typing.get_origin(hint)
     if hint is bool:
         if isinstance(value, bool):
@@ -822,13 +843,13 @@ def _bind_value(hint: Any, value: Any, key: str, failures: list[str]) -> Any:
             bound: dict[str, Any] = {}
             for name, element in value.items():
                 if isinstance(element, Mapping):
-                    bound[str(name)] = _bind(value_type, element, f"{key}.{name}", failures)
+                    bound[str(name)] = _bind(value_type, element, f"{key}.{name}", failures, strict)
                 else:
                     failures.append(f"{key}.{name}: must be a mapping (value: {element!r})")
             return bound
     elif isinstance(hint, type) and is_dataclass(hint):
         if isinstance(value, Mapping):
-            return _bind(hint, value, key, failures)
+            return _bind(hint, value, key, failures, strict)
         failures.append(f"{key}: must be a mapping (value: {value!r})")
     else:  # pragma: no cover - every field type is handled above
         raise TypeError(f"unsupported field type {hint!r}")

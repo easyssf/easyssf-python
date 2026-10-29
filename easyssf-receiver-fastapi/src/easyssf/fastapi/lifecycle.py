@@ -25,8 +25,9 @@ _HTTP_UNAVAILABLE: Final = 503
 
 def receiver_lifespan(receiver: Receiver, inner: Lifespan[Any] | None = None) -> Lifespan[Any]:
     """A lifespan for ``FastAPI(lifespan=...)`` that starts the receiver when the application
-    starts (the streams are registered and polling begins in the background) and stops it when
-    the application shuts down (the acknowledgements it owes are sent). With ``inner``, the
+    starts (the streams are registered and polling begins in the background) and closes it when
+    the application shuts down (the acknowledgements it owes are sent, the HTTP client it made for
+    itself is closed, a given one stays open). With ``inner``, the
     lifespan of the application, the receiver starts after ``inner`` entered and stops before it
     exits, so that the handlers find what the application set up, and whatever ``inner`` yields
     becomes the state of the application.

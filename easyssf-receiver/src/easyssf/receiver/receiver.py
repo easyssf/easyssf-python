@@ -196,13 +196,21 @@ class Receiver:
         self._log = logger if logger is not None else _log
         self._clock: Clock = clock if clock is not None else system_clock
         self._metrics: Metrics = metrics if metrics is not None else NoopMetrics()
-        self._client = http_client if http_client is not None else httpx.AsyncClient()
+        # the clients the receiver made itself are its to close (aclose); a given one is the
+        # caller's
+        self._owned_clients: list[httpx.AsyncClient] = []
+        if http_client is None:
+            http_client = httpx.AsyncClient()
+            self._owned_clients.append(http_client)
+        self._client = http_client
         user_agent = config.http.user_agent.strip()
         if user_agent:
             self._client = _with_user_agent(self._client, user_agent)
+            self._owned_clients.append(self._client)
         self._transmitters: list[Transmitter] = []
         self._by_issuer: dict[str, Transmitter] = {}
         self._started = False
+        self._closed = False
 
         self._dedup: JtiDedupStore | None = None
         if config.dedup.enabled:
@@ -584,19 +592,50 @@ class Receiver:
         """Whether :meth:`start` was called and :meth:`stop` was not."""
         return self._started
 
+    @property
+    def closed(self) -> bool:
+        """Whether :meth:`aclose` was called: the receiver's own HTTP clients are closed and it
+        cannot start again."""
+        return self._closed
+
     # -- lifecycle ---------------------------------------------------------------------------------------
 
     async def start(self) -> None:
         """Registers the streams and starts polling in the background, for every transmitter
         configured for it; it returns at once. Calling it again while started has no effect;
-        after :meth:`stop`, :meth:`start` starts the work again."""
+        after :meth:`stop`, :meth:`start` starts the work again, after :meth:`aclose` it cannot.
+        When a transmitter fails to start, the ones started before it are stopped again and the
+        receiver is left as before the call, so that a later :meth:`start` tries again.
+
+        Raises:
+            RuntimeError: when the receiver was closed.
+        """
+        if self._closed:
+            raise RuntimeError("The SSF receiver was closed, a closed receiver cannot start again")
         if self._started:
             return
         self._started = True
         names: list[str] = []
-        for transmitter in self._transmitters:
-            await transmitter.start()
-            names.append(str(transmitter))
+        try:
+            for transmitter in self._transmitters:
+                await transmitter.start()
+                names.append(str(transmitter))
+        except BaseException:
+            # the transmitters started so far would keep running, unreachable for a stop, and the
+            # next start would do nothing: roll back to the state before the call, the failed one
+            # included, as its registrar may run although its poller did not start
+            self._started = False
+            for transmitter in reversed(self._transmitters[: len(names) + 1]):
+                try:
+                    await transmitter.stop()
+                except Exception as error:  # the failure of the start is the one to raise
+                    self._log.warning(
+                        "Could not stop the transmitter %s after the receiver failed to start: %s",
+                        transmitter,
+                        error,
+                        extra={"transmitter": transmitter.issuer},
+                    )
+            raise
         self._log.info(
             "SSF receiver started with %d transmitter(s): %s",
             len(names),
@@ -613,12 +652,24 @@ class Receiver:
         for transmitter in self._transmitters:
             await transmitter.stop()
 
+    async def aclose(self) -> None:
+        """Stops the receiver (:meth:`stop`) and closes the HTTP clients it made itself: the one
+        of its own when no ``http_client`` was given, and the one that adds the configured
+        ``user-agent``. A given client is the caller's and stays open. A closed receiver cannot
+        start again; ``async with receiver:`` closes it on exit. Calling it again has no effect."""
+        await self.stop()
+        if self._closed:
+            return
+        self._closed = True
+        for client in reversed(self._owned_clients):
+            await client.aclose()
+
     async def __aenter__(self) -> Receiver:
         await self.start()
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
-        await self.stop()
+        await self.aclose()
 
     async def health(self) -> ReceiverHealth:
         """The health of the receiver as of now, from what it already knows; no transmitter is
@@ -639,7 +690,7 @@ class Receiver:
 
     def __repr__(self) -> str:
         names = [str(transmitter) for transmitter in self._transmitters]
-        return f"Receiver(transmitters={names!r}, started={self._started})"
+        return f"Receiver(transmitters={names!r}, started={self._started}, closed={self._closed})"
 
 
 class _LateBoundVerifier:

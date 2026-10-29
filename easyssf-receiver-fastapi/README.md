@@ -13,9 +13,10 @@ uv add easyssf-receiver-fastapi      # or: pip install easyssf-receiver-fastapi
 ## The receiver with the application
 
 `receiver_lifespan` starts the receiver when the application starts (streams are registered and
-polling begins in the background) and stops it on shutdown (the acknowledgements it owes are
-sent). With a lifespan of your own, the receiver starts after yours entered and stops before it
-exits, so the handlers find what the application set up:
+polling begins in the background) and closes it on shutdown (the acknowledgements it owes are
+sent, the HTTP client it made for itself is closed). With a lifespan of your own, the receiver
+starts after yours entered and stops before it exits, so the handlers find what the application
+set up:
 
 ```python
 from fastapi import FastAPI

@@ -264,6 +264,41 @@ def test_redirect_stays_within_the_origin():
     assert UriPolicy.is_loopback("http://[::1]:8080/x") and not UriPolicy.is_loopback("http://a.example")
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.attacker.example/x",
+        "http://127.0.0.1.attacker.example/x",
+        "http://localhost.attacker.example/x",
+        "http://xlocalhost/x",
+        "http://127/x",
+        "http://[::2]/x",
+        "http://10.0.0.1/x",
+    ],
+)
+def test_host_that_merely_looks_like_loopback_must_use_https(url: str):
+    # 127.attacker.example resolves wherever its owner points it: no exemption from https
+    assert not UriPolicy.is_loopback(url)
+    with pytest.raises(UriPolicyError, match="must use https"):
+        UriPolicy().check_issuer(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/x",
+        "http://127.255.255.254:8080/x",
+        "http://[::1]/x",
+        "http://[0:0:0:0:0:0:0:1]/x",
+        "http://LOCALHOST/x",
+        "http://app.localhost/x",
+    ],
+)
+def test_loopback_addresses_are_exempt_from_https(url: str):
+    assert UriPolicy.is_loopback(url)
+    UriPolicy().check_issuer(url)
+
+
 async def test_refuses_redirect_to_another_port_of_the_same_host():
     transmitter = TestTransmitter()
     resolver = redirecting_resolver(transmitter, "https://transmitter.example:8443" + METADATA_PATH, UriPolicy())

@@ -45,11 +45,12 @@ def push_router(push_handler: PushHandler, path: str = DEFAULT_PUSH_PATH) -> API
         declared = request.headers.get("content-length")
         if declared is not None and declared.isdigit() and int(declared) > MAX_SET_SIZE:
             return into_response(_too_large())
-        # read up to one byte beyond the limit, as the raw ASGI app does: no more is needed to
-        # reject the request, and a transmitter cannot make the endpoint buffer anything it likes
+        # read up to one byte beyond the limit, as the raw ASGI app does, whatever the size of the
+        # chunks the server hands over: no more is needed to reject the request, and a transmitter
+        # cannot make the endpoint buffer anything it likes
         body = b""
         async for chunk in request.stream():
-            body += chunk
+            body += chunk[: MAX_SET_SIZE + 1 - len(body)]
             if len(body) > MAX_SET_SIZE:
                 break
         response = await push_handler.handle(request.headers.get("authorization"), body)

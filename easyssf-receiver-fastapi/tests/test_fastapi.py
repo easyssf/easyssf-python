@@ -177,6 +177,26 @@ async def test_push_route_rejects_an_oversized_body_sent_in_chunks():
     assert response.json()["err"] == "invalid_request"
 
 
+async def test_push_route_buffers_no_more_than_the_limit_whatever_the_chunks():
+    seen: list[int] = []
+
+    class Spy:
+        async def handle(self, authorization: str | None, body: bytes) -> PushResponse:
+            seen.append(len(body))
+            return PushResponse(413, None)
+
+    app = FastAPI()
+    app.include_router(push_router(Spy()))  # type: ignore[arg-type]
+
+    async def one_chunk() -> AsyncIterator[bytes]:
+        yield b"a" * (4 * MAX_SET_SIZE)
+
+    async with client_of(app) as client:
+        response = await client.post("/ssf/push", content=one_chunk(), headers=PUSH_HEADERS)
+    assert response.status_code == 413
+    assert seen == [MAX_SET_SIZE + 1], "one byte beyond the limit, not the chunk"
+
+
 async def test_push_route_answers_other_methods_with_405():
     transmitter = TestTransmitter()
     receiver = Receiver(push_config(transmitter), http_client=transmitter.client)

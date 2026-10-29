@@ -11,7 +11,13 @@ import pytest
 
 from easyssf.core import POLL_URI, Claims, Subject, audiences, event_types, object_member, string_member
 from easyssf.core.subjects import complex_subject, iss_sub, opaque
-from easyssf.receiver.config import STREAM_MANAGEMENT_RECEIVER, OAuth2Config, ReceiverConfig, default_receiver_config
+from easyssf.receiver.config import (
+    STREAM_MANAGEMENT_RECEIVER,
+    OAuth2Config,
+    ReceiverConfig,
+    TransmitterConfig,
+    default_receiver_config,
+)
 from easyssf.receiver.errors import ConfigurationError
 from easyssf.receiver.event import EventContext, for_event
 from easyssf.receiver.poll import InMemoryPollAckStore
@@ -26,6 +32,7 @@ from easyssf.testing import (
     CLIENT_SECRET,
     MetadataLocation,
     TestTransmitter,
+    client_for,
     eventually,
 )
 
@@ -251,7 +258,7 @@ async def test_receiver_starts_again_after_the_context_of_start_was_cancelled():
     assert not registrar.is_running, "not stopped"
 
 
-async def test_receiver_without_a_given_client_makes_its_own():
+async def test_receiver_without_a_given_client_makes_its_own_and_closes_it():
     transmitter = TestTransmitter()
     receiver = Receiver(push_config(transmitter))
     assert isinstance(receiver.http_client, httpx.AsyncClient)
@@ -261,4 +268,71 @@ async def test_receiver_without_a_given_client_makes_its_own():
     assert receiver.name_of(transmitter.issuer) == "default"
     assert receiver.name_of("https://unknown.example") == "https://unknown.example"
     assert "default" in repr(receiver)
-    await receiver.http_client.aclose()
+    assert not receiver.closed
+    async with receiver:
+        assert receiver.started and not receiver.http_client.is_closed
+    assert receiver.closed and not receiver.started
+    assert receiver.http_client.is_closed, "the receiver's own client is closed with it"
+    await receiver.aclose()  # a second close has no effect
+    with pytest.raises(RuntimeError, match="closed"):
+        await receiver.start()
+
+
+async def test_receiver_leaves_a_given_client_open_and_closes_the_user_agent_wrapper():
+    transmitter = TestTransmitter()
+    config = push_config(transmitter)
+    config.http.user_agent = "app/1"
+    receiver = Receiver(config, http_client=transmitter.client)
+    assert receiver.http_client is not transmitter.client, "the client of the receiver's own adds the user agent"
+    async with receiver:
+        pass
+    assert receiver.http_client.is_closed, "the wrapper is the receiver's to close"
+    assert not transmitter.client.is_closed, "the given client is the caller's"
+    plain = Receiver(push_config(transmitter), http_client=transmitter.client)
+    await plain.aclose()
+    assert not transmitter.client.is_closed
+
+
+async def test_stop_leaves_the_clients_open_for_a_later_start():
+    transmitter = TestTransmitter()
+    receiver = Receiver(push_config(transmitter))
+    await receiver.start()
+    await receiver.stop()
+    assert not receiver.http_client.is_closed and not receiver.closed
+    await receiver.start()
+    await receiver.aclose()
+    assert receiver.http_client.is_closed
+
+
+async def test_failed_start_stops_the_transmitters_started_before_and_leaves_the_receiver_stopped():
+    first, second, third = TestTransmitter(), TestTransmitter(host="two.example"), TestTransmitter(host="three.example")
+    config = default_receiver_config()
+    for name, transmitter in (("a", first), ("b", second), ("c", third)):
+        polling = TransmitterConfig(
+            transmitter_issuer=transmitter.issuer,
+            expected_audience=AUDIENCE,
+            delivery_method="poll",
+            transmitter_access_token=ACCESS_TOKEN,
+        )
+        polling.poll.endpoint_url = transmitter.poll_url
+        config.transmitters[name] = polling
+    receiver = Receiver(config, http_client=client_for(first, second, third))
+    pollers = [t.poller for t in receiver.transmitters]
+    assert all(pollers)
+    failing = receiver.transmitter("b")
+    assert failing is not None
+
+    async def refuse() -> None:
+        raise OSError("no socket")
+
+    failing.poller.start = refuse  # type: ignore[method-assign]
+    with pytest.raises(OSError, match="no socket"):
+        await receiver.start()
+    assert not receiver.started
+    assert not pollers[0].is_running, "the poller started before the failure was stopped again"
+    assert not pollers[2].is_running, "the poller after the failure was never started"
+    failing.poller.start = type(failing.poller).start.__get__(failing.poller)  # type: ignore[method-assign]
+    await receiver.start()  # start works again after the rollback
+    assert receiver.started and all(poller.is_running for poller in pollers)
+    await receiver.aclose()
+    assert not any(poller.is_running for poller in pollers)

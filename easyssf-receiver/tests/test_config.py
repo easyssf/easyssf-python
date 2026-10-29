@@ -323,7 +323,8 @@ def test_from_mapping_accepts_snake_case_keys_and_several_transmitters():
             },
             "unknown-key": {"ignored": True},
             "data": {"enabled": False, "unknown": 1},
-        }
+        },
+        strict=False,  # the unknown keys are ignored, as the Go binding does
     )
     assert config.transmitter_issuer == "https://idp.example"
     assert config.allow_insecure_http is True
@@ -396,6 +397,43 @@ def test_from_mapping_reports_values_of_the_wrong_type_through_validate():
     disabled = ReceiverConfig.from_mapping({"enabled": False, "dedup": {"capacity": "lots"}})
     with pytest.raises(ConfigurationError, match=r"dedup\.capacity: must be an integer"):
         disabled.validate()
+
+
+def test_from_mapping_reports_unknown_keys_with_the_key_they_resemble():
+    # a typo would otherwise leave the push endpoint without the header it expects, silently
+    config = ReceiverConfig.from_mapping(
+        {
+            "transmitter-issuer": "https://idp.example",
+            "expected-audience": "app",
+            "push": {"expected-auth-headers": "Bearer s3cr3t", "endpoint_path": "/ssf/push"},
+            "polling": {"interval": "10s"},
+            "transmitters": {"okta": {"transmitter-issuer": "https://okta.example", "exepcted-audience": "app"}},
+            "http": {"retry": {"max-retries": 1, "jitter": "none"}},
+            "easyssf": {"receiver": {}},
+        }
+    )
+    assert config.push.expected_auth_header == "", "the misspelled key bound nothing"
+    with pytest.raises(ConfigurationError) as raised:
+        config.validate()
+    assert raised.value.failures[:5] == [
+        f"{CONFIGURATION_SECTION}.polling: unknown setting, did you mean 'poll'?",
+        f"{CONFIGURATION_SECTION}.easyssf: unknown setting",
+        f"{CONFIGURATION_SECTION}.push.expected-auth-headers: unknown setting, did you mean 'expected-auth-header'?",
+        f"{CONFIGURATION_SECTION}.transmitters.okta.exepcted-audience: unknown setting, did you mean 'expected-audience'?",
+        f"{CONFIGURATION_SECTION}.http.retry.jitter: unknown setting",
+    ]
+    # and the consequence of the typo, which strict binding is there to explain
+    assert raised.value.failures[5].startswith(f"{CONFIGURATION_SECTION}.transmitters.okta.expected-audience: ")
+    assert len(raised.value.failures) == 6
+    # strict=False ignores them, as the Spring Boot, .NET and Go bindings do
+    lenient = ReceiverConfig.from_mapping(
+        {"transmitter-issuer": "https://idp.example", "expected-audience": "app", "polling": {}}, strict=False
+    )
+    assert lenient.validate() == []
+    # the internal field is no setting
+    assert ReceiverConfig.from_mapping({"binding-failures": ["x"]}).binding_failures == [
+        f"{CONFIGURATION_SECTION}.binding-failures: unknown setting"
+    ]
 
 
 def test_to_mapping_round_trips_through_from_mapping():

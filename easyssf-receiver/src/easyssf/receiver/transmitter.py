@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import inspect
+import ipaddress
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -116,10 +117,17 @@ class UriPolicy:
 
     @staticmethod
     def is_loopback(url: str) -> bool:
-        """Whether the host of the URL is a loopback address: ``localhost`` and its subdomains,
-        ``127.*``, ``::1``."""
+        """Whether the host of the URL is a loopback address: ``localhost`` and its subdomains
+        (RFC 6761, section 6.3), or a loopback IP address (``127.0.0.0/8``, ``::1``). A host name
+        that merely starts with ``127.``, such as ``127.attacker.example``, is not one: it resolves
+        wherever its owner points it, so it does not earn the exemption from https."""
         host = (urlsplit(url).hostname or "").lower()
-        return host in ("localhost", "::1", "0:0:0:0:0:0:0:1") or host.endswith(".localhost") or host.startswith("127.")
+        if host == "localhost" or host.endswith(".localhost"):
+            return True
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
 
     @staticmethod
     def same_origin(a: str, b: str) -> bool:

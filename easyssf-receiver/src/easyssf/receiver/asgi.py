@@ -45,12 +45,15 @@ def push_app(push_handler: PushHandler) -> AsgiApp:
         if scope["method"] != "POST":
             await _respond(send, _METHOD_NOT_ALLOWED, [(b"allow", b"POST")], b"")
             return
+        # read up to one byte beyond the limit, whatever the size of the chunks the server hands
+        # over: no more is needed to reject the request, and a transmitter cannot make the endpoint
+        # buffer anything it likes
         body = b""
         while len(body) <= MAX_SET_SIZE:
             message = await receive()
             if message["type"] == "http.disconnect":
                 return
-            body += message.get("body", b"")
+            body += message.get("body", b"")[: MAX_SET_SIZE + 1 - len(body)]
             if not message.get("more_body", False):
                 break
         authorization = next(

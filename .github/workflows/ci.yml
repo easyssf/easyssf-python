@@ -49,3 +49,36 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  install:
+    name: Install the wheels in a clean environment
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist
+      - uses: astral-sh/setup-uv@v10.3.2
+      # no checkout and no workspace: the published distributions have to resolve each other and
+      # their dependencies from the index and the wheels alone
+      - run: uv venv --python 3.11 clean
+      - run: uv pip install --python clean --find-links dist --no-build "easyssf-receiver-fastapi==0.6.0" "easyssf-test==0.6.0"
+      - run: uv pip list --python clean | grep easyssf
+      - run: |
+          clean/bin/python - <<'EOF'
+          from fastapi import FastAPI
+
+          from easyssf.fastapi import push_router_for, receiver_lifespan
+          from easyssf.receiver import Receiver, ReceiverConfig, for_event
+          from easyssf.testing import TestTransmitter
+
+          transmitter = TestTransmitter()
+          config = ReceiverConfig.from_mapping(
+              {"transmitter-issuer": transmitter.issuer, "expected-audience": "https://app.example", "push": {"expected-auth-header": "Bearer x"}}
+          )
+          receiver = Receiver(config, handlers=[for_event("CaepSessionRevoked", lambda event: None)], http_client=transmitter.client)
+          app = FastAPI(lifespan=receiver_lifespan(receiver))
+          app.include_router(push_router_for(receiver))
+          print("imported and assembled from the wheels:", receiver)
+          EOF

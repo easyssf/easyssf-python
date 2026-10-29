@@ -251,6 +251,39 @@ async def test_serves_push_endpoint_over_asgi():
         assert response.status_code == 413
 
 
+async def test_asgi_app_buffers_no_more_than_the_limit_whatever_the_chunks():
+    # a server may hand the body over in one chunk; the app must not keep more of it than it reads
+    seen: list[int] = []
+
+    class Spy:
+        async def handle(self, authorization: str | None, body: bytes) -> PushResponse:
+            seen.append(len(body))
+            return PushResponse(413, None)
+
+    app = push_app(Spy())  # type: ignore[arg-type]
+    messages = iter(
+        [
+            {"type": "http.request", "body": b"a" * (MAX_SET_SIZE // 2), "more_body": True},
+            {"type": "http.request", "body": b"a" * (4 * MAX_SET_SIZE), "more_body": True},
+            {"type": "http.request", "body": b"a" * MAX_SET_SIZE, "more_body": False},
+        ]
+    )
+
+    async def receive() -> dict:
+        return next(messages)
+
+    sent: list[dict] = []
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    scope = {"type": "http", "method": "POST", "path": "/ssf/push", "headers": [(b"authorization", SECRET.encode())]}
+    await app(scope, receive, send)
+    assert seen == [MAX_SET_SIZE + 1], "one byte beyond the limit, not the chunk"
+    assert sent[0]["status"] == 413
+    assert next(messages)["more_body"] is False, "the rest of the body was left unread"
+
+
 async def test_asgi_app_acknowledges_lifespan_events():
     transmitter = TestTransmitter()
     app = push_app(push_handler(transmitter, Recorder()))

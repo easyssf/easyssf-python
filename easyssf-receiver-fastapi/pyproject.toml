@@ -17,7 +17,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "easyssf-receiver",
+    "easyssf-receiver>=0.6,<0.7",
     "fastapi>=0.115,<1",
 ]
 
