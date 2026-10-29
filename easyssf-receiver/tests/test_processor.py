@@ -337,6 +337,21 @@ async def test_claim_lost_between_the_last_renewal_and_the_record_of_the_success
     assert (await store.claim(token_of(encoded_set))).state is JtiClaimState.IN_PROGRESS
 
 
+async def test_store_that_does_not_say_it_recorded_the_success_does_not_acknowledge():
+    # fail closed: a store written against the earlier protocol returns None from processed
+    transmitter = TestTransmitter()
+    store = InMemoryJtiDedupStore(10)
+
+    async def silent_processed(token: EventToken, claim: JtiClaim) -> None:
+        await InMemoryJtiDedupStore.processed(store, token, claim)
+
+    store.processed = silent_processed  # type: ignore[method-assign]
+    p = Processor(verifier(transmitter), store)
+    p.add_handler(lambda context: None)
+    with pytest.raises(InProgressError):
+        await p.process(transmitter.set("CaepSessionRevoked", alice(transmitter)), PUSH)
+
+
 async def test_set_taken_over_by_a_second_instance_is_acknowledged_by_that_instance_only():
     # two processors over one store: the first holds the SET past the lease, the second takes it
     # over and completes; the first, when its handler returns, leaves the SET to the second

@@ -266,13 +266,14 @@ class Processor:
             # the success is the new holder's to record and to acknowledge once the claim was
             # taken over, whether a renewal noticed or only processed does: a claim may be lost
             # between the last renewal and the record of the success
-            recorded = False
+            recorded: object = False
             if owned:
                 try:
                     recorded = await self._dedup.processed(token, claim)
                 except Exception as error:
                     raise StoreError(error) from error
-            if recorded is False:
+            # fail closed: only an explicit True acknowledges, a store that returns nothing does not
+            if recorded is not True:
                 self._log.warning(
                     "Leaving SET for a redelivery, its claim was taken over by another instance while the handlers "
                     "ran; they outlived the dedup lease",

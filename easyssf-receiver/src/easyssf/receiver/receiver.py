@@ -676,8 +676,16 @@ class Receiver:
         finally:
             if not self._closed:
                 self._closed = True
+                failure: Exception | None = None
                 for client in reversed(self._owned_clients):
-                    await client.aclose()
+                    try:
+                        await client.aclose()
+                    except Exception as error:  # every client is closed, the first failure is raised
+                        self._log.error("Could not close the HTTP client of the receiver", exc_info=error)
+                        if failure is None:
+                            failure = error
+                if failure is not None:
+                    raise failure
 
     async def __aenter__(self) -> Receiver:
         await self.start()

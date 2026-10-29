@@ -335,6 +335,24 @@ async def test_stop_stops_every_transmitter_although_one_fails_and_aclose_closes
     assert receiver.http_client.is_closed, "the client is closed although stop failed"
 
 
+async def test_aclose_closes_every_owned_client_although_one_fails():
+    transmitter = TestTransmitter()
+    config = push_config(transmitter)
+    config.http.user_agent = "app/1"  # two owned clients: the receiver's own and the wrapper
+    receiver = Receiver(config)
+    wrapper, own = receiver.http_client, receiver._owned_clients[0]
+    assert wrapper is not own
+
+    async def refuse() -> None:
+        raise OSError("close failed")
+
+    wrapper.aclose = refuse  # type: ignore[method-assign]
+    with pytest.raises(OSError, match="close failed"):
+        await receiver.aclose()
+    assert receiver.closed
+    assert own.is_closed, "the client behind the failing one was closed too"
+
+
 async def test_failed_start_stops_the_transmitters_started_before_and_leaves_the_receiver_stopped():
     first, second, third = TestTransmitter(), TestTransmitter(host="two.example"), TestTransmitter(host="three.example")
     config = default_receiver_config()
