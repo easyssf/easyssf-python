@@ -276,7 +276,7 @@ async def test_claim_is_renewed_while_a_long_handler_runs():
     assert renewals >= 4
 
 
-async def test_result_of_handlers_is_not_recorded_when_the_claim_was_taken_over():
+async def test_result_of_handlers_is_neither_recorded_nor_acknowledged_when_the_claim_was_taken_over():
     transmitter = TestTransmitter()
     clock = ManualClock()
     store = InMemoryJtiDedupStore(10, timedelta(seconds=60), clock)
@@ -287,7 +287,10 @@ async def test_result_of_handlers_is_not_recorded_when_the_claim_was_taken_over(
         started.set()
         await release.wait()
 
-    p = Processor(verifier(transmitter), store, ProcessorOptions(claim_renewal=timedelta(milliseconds=10)))
+    metrics = RecordingMetrics()
+    p = Processor(
+        verifier(transmitter), store, ProcessorOptions(claim_renewal=timedelta(milliseconds=10), metrics=metrics)
+    )
     p.add_handler(slow)
     encoded_set = transmitter.set("CaepSessionRevoked", alice(transmitter))
     processing = asyncio.create_task(p.process(encoded_set, PUSH))
@@ -298,9 +301,80 @@ async def test_result_of_handlers_is_not_recorded_when_the_claim_was_taken_over(
     assert taken_over.is_granted
     await asyncio.sleep(0.03)
     release.set()
-    assert (await processing).is_handled, "the handlers still ran to completion"
+    # the handlers ran to completion here, but the SET is the other instance's to acknowledge:
+    # a 202 or a poll acknowledgement from here would hide a failure there from the transmitter
+    with pytest.raises(InProgressError):
+        await processing
+    assert metrics.sets[-1][2] == SetOutcome.IN_PROGRESS
     # the first instance did not record the success: the claim of the second still holds
     assert (await store.claim(token_of(encoded_set))).state is JtiClaimState.IN_PROGRESS
+
+
+async def test_claim_lost_between_the_last_renewal_and_the_record_of_the_success_is_not_acknowledged_either():
+    # without renewal the lease bounds the handlers; a slow one outlives it, and processed is
+    # the first to learn that the claim is gone
+    transmitter = TestTransmitter()
+    clock = ManualClock()
+    store = InMemoryJtiDedupStore(10, timedelta(seconds=60), clock)
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def slow(context: EventContext) -> None:
+        started.set()
+        await release.wait()
+
+    p = Processor(verifier(transmitter), store)
+    p.add_handler(slow)
+    encoded_set = transmitter.set("CaepSessionRevoked", alice(transmitter))
+    processing = asyncio.create_task(p.process(encoded_set, PUSH))
+    await started.wait()
+    clock.advance(timedelta(seconds=61))
+    taken_over = await store.claim(token_of(encoded_set))
+    assert taken_over.is_granted
+    release.set()
+    with pytest.raises(InProgressError):
+        await processing
+    assert (await store.claim(token_of(encoded_set))).state is JtiClaimState.IN_PROGRESS
+
+
+async def test_set_taken_over_by_a_second_instance_is_acknowledged_by_that_instance_only():
+    # two processors over one store: the first holds the SET past the lease, the second takes it
+    # over and completes; the first, when its handler returns, leaves the SET to the second
+    transmitter = TestTransmitter()
+    clock = ManualClock()
+    store = InMemoryJtiDedupStore(10, timedelta(seconds=60), clock)
+    release = asyncio.Event()
+    started = asyncio.Event()
+    handled: list[str] = []
+
+    async def slow(context: EventContext) -> None:
+        started.set()
+        handled.append("first")
+        await release.wait()
+
+    async def quick(context: EventContext) -> None:
+        handled.append("second")
+
+    first = Processor(verifier(transmitter), store, ProcessorOptions(claim_renewal=timedelta(milliseconds=10)))
+    first.add_handler(slow)
+    second = Processor(verifier(transmitter), store)
+    second.add_handler(quick)
+    encoded_set = transmitter.set("CaepSessionRevoked", alice(transmitter))
+    processing = asyncio.create_task(first.process(encoded_set, PUSH))
+    await started.wait()
+    with pytest.raises(InProgressError):
+        await second.process(encoded_set, PUSH)  # within the lease: the first holds it
+    clock.advance(timedelta(seconds=61))
+    result = await second.process(encoded_set, PUSH)  # after the lease: taken over and completed
+    assert result.is_handled
+    await asyncio.sleep(0.03)
+    release.set()
+    with pytest.raises(InProgressError):
+        await processing
+    assert handled == ["first", "second"]
+    # the redelivery the first asked for finds the SET processed: handled once more by nobody
+    assert (await second.process(encoded_set, PUSH)).outcome is ProcessingOutcome.DUPLICATE
+    assert handled == ["first", "second"]
 
 
 def token_of(encoded_set: str) -> EventToken:

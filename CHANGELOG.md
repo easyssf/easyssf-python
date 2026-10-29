@@ -7,6 +7,16 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- A SET whose claim was taken over by another instance while the handlers ran (they outlived
+  the `dedup.lease`) is no longer acknowledged by the late instance: `Processor.process` raises
+  `InProgressError`, the push endpoint answers `503` and the poller does not acknowledge, so that
+  the acknowledgement comes from the instance that records the success, and a failure there is
+  not hidden from the transmitter. `JtiDedupStore.processed` returns whether it recorded the
+  success (`False` when the claim was taken over), which closes the gap between the last renewal
+  and the record. The Java, Go, .NET and Rust ports still return the result of the handlers in
+  this case.
+- `Receiver.stop()` stops every transmitter even when one fails to, and raises the first failure
+  afterwards; `Receiver.aclose()` closes the receiver's own HTTP clients even when `stop()` fails.
 - `ReceiverConfig.from_mapping` reports a key it does not know as a configuration failure, with
   the key it resembles (`push.expected-auth-headers: unknown setting, did you mean
   'expected-auth-header'?`), instead of ignoring it silently as the Spring Boot, .NET and Go

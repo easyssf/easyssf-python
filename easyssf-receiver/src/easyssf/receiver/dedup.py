@@ -69,8 +69,10 @@ class JtiDedupStore(Protocol):
     A granted claim carries a token that fences it: :meth:`processed`, :meth:`forget` and
     :meth:`renew` only act on the claim with that token. An instance whose handlers outlived the
     lease therefore neither completes nor deletes the claim of the instance that took the SET
-    over; the SET belongs to the new holder. An instance whose handlers may run longer than the
-    lease renews its claim meanwhile.
+    over; the SET belongs to the new holder, and :meth:`processed` returns ``False`` so that the
+    late instance does not acknowledge the SET either: the acknowledgement is the new holder's,
+    with the record of the success. An instance whose handlers may run longer than the lease
+    renews its claim meanwhile.
 
     A failure of the store raises; the processor reports it as a ``StoreError``.
     """
@@ -80,9 +82,11 @@ class JtiDedupStore(Protocol):
         before or is being handled by another instance."""
         ...
 
-    async def processed(self, token: EventToken, claim: JtiClaim) -> None:
-        """Records that the handlers of a claimed SET succeeded. Does nothing if the claim was
-        taken over meanwhile, because the handlers outlived the lease."""
+    async def processed(self, token: EventToken, claim: JtiClaim) -> bool:
+        """Records that the handlers of a claimed SET succeeded and returns ``True``. Does nothing
+        and returns ``False`` if the claim was taken over meanwhile, because the handlers outlived
+        the lease: the SET then belongs to the instance that took it over, and the caller leaves
+        it to that instance to acknowledge."""
         ...
 
     async def forget(self, token: EventToken, claim: JtiClaim) -> None:
@@ -166,7 +170,7 @@ class InMemoryJtiDedupStore:
             return self._grant(key)
         return JtiClaim(JtiClaimState.IN_PROGRESS)
 
-    async def processed(self, token: EventToken, claim: JtiClaim) -> None:
+    async def processed(self, token: EventToken, claim: JtiClaim) -> bool:
         """Records the success of the claim unless it was taken over; an evicted claim is
         recorded anyway."""
         key = token.idempotency_key
@@ -174,6 +178,8 @@ class InMemoryJtiDedupStore:
         # the claim may have been evicted meanwhile: record the success anyway
         if existing is None or existing.holds(claim):
             self._put(key, _KnownState.PROCESSED, claim.token)
+            return True
+        return False
 
     async def forget(self, token: EventToken, claim: JtiClaim) -> None:
         """Forgets the SET if the claim still holds it."""

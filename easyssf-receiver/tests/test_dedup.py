@@ -25,7 +25,7 @@ async def test_claim_in_progress_processed_forget():
     assert claim.state is JtiClaimState.GRANTED, "first claim is granted"
     assert claim.is_granted
     assert await claim_state(store, set_) is JtiClaimState.IN_PROGRESS, "second claim is in progress"
-    await store.processed(set_, claim)
+    assert await store.processed(set_, claim) is True
     assert await claim_state(store, set_) is JtiClaimState.PROCESSED, "processed"
     # forgetting a processed SET does nothing: only an in-progress claim is forgotten
     await store.forget(set_, claim)
@@ -57,12 +57,12 @@ async def test_late_holder_can_neither_complete_nor_forget_the_claim_taken_over_
     first = await store.claim(set_)
     clock.advance(timedelta(seconds=61))
     second = await store.claim(set_)
-    await store.processed(set_, first)
+    assert await store.processed(set_, first) is False, "the first does not record, nor acknowledge"
     assert await claim_state(store, set_) is JtiClaimState.IN_PROGRESS, "still held by the second"
     await store.forget(set_, first)
     assert await claim_state(store, set_) is JtiClaimState.IN_PROGRESS, "still held by the second"
     assert await store.renew(set_, first) is None, "the first cannot renew"
-    await store.processed(set_, second)
+    assert await store.processed(set_, second) is True
     assert await claim_state(store, set_) is JtiClaimState.PROCESSED, "the second completes"
 
 

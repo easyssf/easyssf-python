@@ -183,7 +183,11 @@ class Processor:
         Raises:
             RejectedError: the SET is invalid, with the error code of RFC 8935.
             TransmitterUnavailableError: the keys could not be obtained; deliver the SET again.
-            InProgressError: another instance is handling the SET; deliver it again.
+            InProgressError: another instance is handling the SET; deliver it again. Also when
+                the claim of this instance was taken over while its handlers ran, because they
+                outlived the lease: the handlers may have succeeded here, but the SET belongs to
+                the instance that took it over, which records and acknowledges it. Acknowledging
+                it here as well would let a failure there go unnoticed by the transmitter.
             HandlingError: a handler failed; every handler ran, the SET is forgotten and expected
                 to be delivered again.
             StoreError: the dedup store failed.
@@ -247,7 +251,7 @@ class Processor:
                         first = (name, error)
         finally:
             # the claim as last renewed; a taken-over one no longer belongs to this instance, so
-            # the outcome of the handlers is not recorded
+            # the outcome of the handlers is neither recorded nor acknowledged
             claim, owned = await renewal.stop()
 
         if first is not None:
@@ -258,11 +262,24 @@ class Processor:
                     raise StoreError(error) from error
             self._metrics.set_received(issuer, delivery, SetOutcome.FAILED)
             raise HandlingError(first[0], first[1], failed)
-        if self._dedup is not None and owned:
-            try:
-                await self._dedup.processed(token, claim)
-            except Exception as error:
-                raise StoreError(error) from error
+        if self._dedup is not None:
+            # the success is the new holder's to record and to acknowledge once the claim was
+            # taken over, whether a renewal noticed or only processed does: a claim may be lost
+            # between the last renewal and the record of the success
+            recorded = False
+            if owned:
+                try:
+                    recorded = await self._dedup.processed(token, claim)
+                except Exception as error:
+                    raise StoreError(error) from error
+            if recorded is False:
+                self._log.warning(
+                    "Leaving SET for a redelivery, its claim was taken over by another instance while the handlers "
+                    "ran; they outlived the dedup lease",
+                    extra={"jti": token.jti, "transmitter": issuer},
+                )
+                self._metrics.set_received(issuer, delivery, SetOutcome.IN_PROGRESS)
+                raise InProgressError()
         self._metrics.set_received(issuer, delivery, SetOutcome.HANDLED)
         for event_type in event.event_types:
             self._metrics.event_handled(issuer, event_type, delivery)

@@ -304,6 +304,37 @@ async def test_stop_leaves_the_clients_open_for_a_later_start():
     assert receiver.http_client.is_closed
 
 
+async def test_stop_stops_every_transmitter_although_one_fails_and_aclose_closes_the_client_regardless():
+    first, second, third = TestTransmitter(), TestTransmitter(host="two.example"), TestTransmitter(host="three.example")
+    config = default_receiver_config()
+    for name, transmitter in (("a", first), ("b", second), ("c", third)):
+        polling = TransmitterConfig(
+            transmitter_issuer=transmitter.issuer,
+            expected_audience=AUDIENCE,
+            delivery_method="poll",
+            transmitter_access_token=ACCESS_TOKEN,
+        )
+        polling.poll.endpoint_url = transmitter.poll_url
+        config.transmitters[name] = polling
+    receiver = Receiver(config)
+    pollers = [t.poller for t in receiver.transmitters]
+    failing = receiver.transmitter("b")
+    assert failing is not None
+    original_stop = failing.poller.stop
+
+    async def refuse() -> None:
+        await original_stop()
+        raise OSError("flush failed")
+
+    failing.poller.stop = refuse  # type: ignore[method-assign]
+    await receiver.start()
+    with pytest.raises(OSError, match="flush failed"):
+        await receiver.aclose()
+    assert not receiver.started and receiver.closed
+    assert not any(poller.is_running for poller in pollers), "the transmitters after the failing one were stopped too"
+    assert receiver.http_client.is_closed, "the client is closed although stop failed"
+
+
 async def test_failed_start_stops_the_transmitters_started_before_and_leaves_the_receiver_stopped():
     first, second, third = TestTransmitter(), TestTransmitter(host="two.example"), TestTransmitter(host="three.example")
     config = default_receiver_config()

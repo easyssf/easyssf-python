@@ -645,24 +645,39 @@ class Receiver:
 
     async def stop(self) -> None:
         """Ends the background work: pollers send the acknowledgements they owe, registrars delete
-        streams configured for it."""
+        streams configured for it. Every transmitter is stopped even when one fails to; the first
+        failure is raised afterwards."""
         if not self._started:
             return
         self._started = False
+        failure: Exception | None = None
         for transmitter in self._transmitters:
-            await transmitter.stop()
+            try:
+                await transmitter.stop()
+            except Exception as error:
+                self._log.error(
+                    "Could not stop the transmitter %s",
+                    transmitter,
+                    exc_info=error,
+                    extra={"transmitter": transmitter.issuer},
+                )
+                if failure is None:
+                    failure = error
+        if failure is not None:
+            raise failure
 
     async def aclose(self) -> None:
         """Stops the receiver (:meth:`stop`) and closes the HTTP clients it made itself: the one
         of its own when no ``http_client`` was given, and the one that adds the configured
         ``user-agent``. A given client is the caller's and stays open. A closed receiver cannot
         start again; ``async with receiver:`` closes it on exit. Calling it again has no effect."""
-        await self.stop()
-        if self._closed:
-            return
-        self._closed = True
-        for client in reversed(self._owned_clients):
-            await client.aclose()
+        try:
+            await self.stop()
+        finally:
+            if not self._closed:
+                self._closed = True
+                for client in reversed(self._owned_clients):
+                    await client.aclose()
 
     async def __aenter__(self) -> Receiver:
         await self.start()

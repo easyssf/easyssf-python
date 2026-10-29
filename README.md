@@ -83,8 +83,9 @@ One `uv` workspace, one `easyssf` namespace:
 - **Receives pushed SETs** (RFC 8935): checks the transmitter's `Authorization` header in constant
   time, verifies, **skips SETs it has already processed** (`jti` de-duplication with a lease and
   claim renewal, so a SET another instance is handling is left alone and one abandoned by a crash
-  is taken over), hands verified events to the handlers, answers `202`, `400` with an error
-  document, `401`, `413`, `500` or `503`. The handlers run shielded from the request, so a
+  is taken over; the instance that took it over is the one that records and acknowledges it, a
+  late instance whose handlers outlived the lease answers `503`), hands verified events to the
+  handlers, answers `202`, `400` with an error document, `401`, `413`, `500` or `503`. The handlers run shielded from the request, so a
   transmitter that disconnects does not cancel them, and an exception in one is a failed handler.
 - **Polls for SETs** (RFC 8936): short or long polling, acknowledgements and error reports ride on
   the next request and wait in a `PollAckStore` until it succeeded, invalid SETs are reported with
