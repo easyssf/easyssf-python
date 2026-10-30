@@ -3,7 +3,8 @@ kebab-case under ``easyssf.receiver``, as in the Go and Rust ports. A dataclass 
 defaults of the Java starter; :meth:`ReceiverConfig.from_mapping` binds it from any mapping (a
 parsed YAML, TOML or JSON file) and :meth:`ReceiverConfig.validate` reports every failure at once
 without changing anything. Durations are ``timedelta`` values bound from ``"30s"``, ``"24h"``,
-``"1h30m"`` or a bare number of seconds.
+``"1h30m"`` or a bare number of seconds; data sizes are :data:`DataSize` values bound from
+``"4MB"``, ``"512KB"`` or a bare number of bytes.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import typing
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import timedelta
-from typing import Any, Final, TypeVar
+from typing import Any, Final, NewType, TypeVar
 from urllib.parse import urlsplit
 
 from easyssf.core import DeliveryMethod, SubjectCompatibilityMode, event_types
@@ -31,6 +32,7 @@ __all__ = [
     "STREAM_MANAGEMENT_NONE",
     "STREAM_MANAGEMENT_RECEIVER",
     "DataConfig",
+    "DataSize",
     "DedupConfig",
     "HttpConfig",
     "OAuth2Config",
@@ -46,7 +48,9 @@ __all__ = [
     "TransmitterConfig",
     "default_receiver_config",
     "default_transmitter_config",
+    "format_data_size",
     "format_duration",
+    "parse_data_size",
     "parse_duration",
     "valid_table_prefix",
 ]
@@ -78,7 +82,14 @@ DEFAULT_SCIM_ATTRIBUTE_CLAIMS: Final[tuple[tuple[str, str], ...]] = (
 """The attributes of a ``scim`` subject and the claims of the logged-in user they are matched by
 when none are configured (``session-termination.scim-attribute-claims``)."""
 
+DataSize = NewType("DataSize", int)
+"""A number of bytes, bound from ``"4MB"`` or ``"512KB"`` as Spring's ``DataSize`` and the Go
+port's ``ByteSize`` read it, see :func:`parse_data_size`."""
+
 _DEFAULT_HTTP_TIMEOUT: Final = timedelta(seconds=5)
+_DEFAULT_MAX_RESPONSE_SIZE: Final = DataSize(4 << 20)  # transmitter.MAX_RESPONSE_SIZE
+_DATA_SIZE_UNITS: Final = (("TB", 40), ("GB", 30), ("MB", 20), ("KB", 10), ("B", 0))
+_MAX_DATA_SIZE: Final = (1 << 63) - 1
 _DEFAULT_DEDUP_LEASE: Final = timedelta(seconds=60)
 _SUPPORTED_ALGORITHMS: Final = (
     "RS256",
@@ -139,6 +150,40 @@ def parse_duration(value: str | int | float | timedelta) -> timedelta:
         seconds += float(part.group(1)) * _DURATION_UNITS[part.group(2)]
         position = part.end()
     return timedelta(seconds=sign * seconds)
+
+
+def parse_data_size(value: str | int) -> DataSize:
+    """A data size as Spring's ``DataSize`` reads it: ``"4MB"``, ``"512KB"``, ``"1048576B"`` or a
+    bare number of bytes, as text or as an integer. The units ``B``, ``KB``, ``MB``, ``GB`` and
+    ``TB`` are binary multiples and case-insensitive.
+
+    Raises:
+        ValueError: for anything else, a negative size, a fraction and a ``bool`` included.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | str):
+        raise ValueError(f'not a data size such as "4MB": {value!r}')
+    if isinstance(value, int):
+        if not 0 <= value <= _MAX_DATA_SIZE:
+            raise ValueError(f'not a data size such as "4MB": {value!r}')
+        return DataSize(value)
+    text = value.strip().upper()
+    number, shift = text, 0
+    for unit, unit_shift in _DATA_SIZE_UNITS:
+        if text.endswith(unit):
+            number, shift = text[: -len(unit)].strip(), unit_shift
+            break
+    if not number.isascii() or not number.isdigit() or int(number) > _MAX_DATA_SIZE >> shift:
+        raise ValueError(f'not a data size such as "4MB": {value!r}')
+    return DataSize(int(number) << shift)
+
+
+def format_data_size(size: int) -> str:
+    """A data size in the largest unit it is a whole multiple of: ``"4MB"``, ``"1536B"``, what
+    :func:`parse_data_size` reads back."""
+    for unit, shift in _DATA_SIZE_UNITS[:-1]:
+        if size != 0 and size % (1 << shift) == 0:
+            return f"{size >> shift}{unit}"
+    return f"{size}B"
 
 
 def format_duration(duration: timedelta) -> str:
@@ -456,6 +501,10 @@ class HttpConfig:
     waits for its hold time plus a margin regardless."""
     user_agent: str = ""
     """The ``User-Agent`` header to send with calls to the transmitter; the one of httpx when empty."""
+    max_response_size: DataSize = _DEFAULT_MAX_RESPONSE_SIZE
+    """The largest response body accepted from the transmitter, 4MB by default; a larger response
+    fails the call as if the transmitter were unavailable instead of being buffered. Metadata, JWK
+    Sets, stream configurations and poll responses stay far below it."""
     retry: RetryConfig = field(default_factory=RetryConfig)
     """How a management, metadata or JWK Set call that fails with a connection error or 408, 429,
     500, 502, 503 or 504 is tried again. Poll requests are not retried, the poller has its interval."""
@@ -695,6 +744,8 @@ class ReceiverConfig(TransmitterConfig):
                 failures.append(f"{CONFIGURATION_SECTION}.event-aliases.{alias}: {error}")
         if self.http.timeout <= timedelta(0):
             failures.append(f"{CONFIGURATION_SECTION}.http.timeout: must be positive")
+        if self.http.max_response_size <= 0:
+            failures.append(f"{CONFIGURATION_SECTION}.http.max-response-size: must be positive")
         retry = self.http.retry
         if retry.max_retries < 0 or retry.initial_backoff < timedelta(0) or retry.max_backoff < timedelta(0):
             failures.append(
@@ -822,6 +873,13 @@ def _bind_value(hint: Any, value: Any, key: str, failures: list[str], strict: bo
         if isinstance(value, str):
             return value
         failures.append(f"{key}: must be a string (value: {value!r})")
+    elif hint is DataSize:
+        try:
+            return parse_data_size(value)
+        except ValueError:
+            failures.append(
+                f'{key}: must be a data size such as "4MB", "512KB" or a number of bytes (value: {value!r})'
+            )
     elif hint is timedelta:
         try:
             return parse_duration(value)

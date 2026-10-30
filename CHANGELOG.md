@@ -5,7 +5,28 @@ All notable changes to this project are documented in this file. The format foll
 
 ## [Unreleased]
 
+### Security
+
+- The acknowledgements `Poller.stop()` flushes went to the poll endpoint without the URI policy
+  check of a poll, so that an endpoint that had moved to plain `http` meanwhile would have
+  received the access token. The check now sits in the one method every poll request passes, as
+  in easyssf 0.7.0 for Java.
+- A response body larger than the maximum fails the call with the new `ResponseTooLargeError`
+  instead of being cut off at 4 MiB and handed on; it counts as the transmitter being unavailable
+  and is not tried again. The maximum is the new setting `easyssf.receiver.http.max-response-size`
+  (`4MB` by default, bound as Spring's `DataSize`: `DataSize`, `parse_data_size`,
+  `format_data_size`), and `max_response_size` on `send`, `get_json`, `exchange`,
+  `MetadataResolver`, `StreamClient`, `PollerOptions`, `ClientCredentialsOptions` and
+  `HttpJwkSetSource`. The default fetch of `HttpJwkSetSource` read the JWK Set without any bound;
+  it goes through `send` now, and follows a redirect within the origin as every other call does.
+
 ### Changed
+
+- `StreamClient` checks the issuer of every stream configuration the transmitter returns, not only
+  of a created one: `stream`, `streams`, `update_stream` and `replace_stream` raise
+  `IssuerMismatchError` as `create_stream` did, as the SETs of a stream with another issuer would
+  not verify. `StreamRegistrar` deletes a stream it created with the wrong issuer, as before, and
+  leaves an existing one alone; it fails without retrying either way.
 
 - A SET whose claim was taken over by another instance while the handlers ran (they outlived
   the `dedup.lease`) is no longer acknowledged by the late instance: `Processor.process` raises
@@ -34,6 +55,13 @@ All notable changes to this project are documented in this file. The format foll
   `easyssf-receiver>=0.6,<0.7`), and CI installs the built wheels in a clean environment.
 
 ### Fixed
+
+- A SET the poll response lists under a key other than its `jti` (RFC 8936, section 2.4) is
+  reported to the transmitter as `invalid_request` under that key instead of being handled and
+  acknowledged under a key that is not its own.
+- `StreamRegistrar.stop()` deletes only a stream published since the last `stop()`, not again the
+  one a previous `stop()` deleted, and `start()` waits for a `stop()` under way, so that a
+  registration started meanwhile does not adopt the stream being deleted.
 
 - `UriPolicy.is_loopback` took any host that starts with `127.` for a loopback address, so that
   `http://127.attacker.example/` was exempt from the https requirement; it now uses the parsed IP

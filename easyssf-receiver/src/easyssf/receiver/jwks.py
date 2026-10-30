@@ -18,6 +18,7 @@ from joserfc.jwk import Key, KeySet
 from easyssf.core import Claims, parse_claims
 
 from .errors import Clock, TransmitterUnavailableError, system_clock
+from .transmitter import send
 
 __all__ = [
     "DEFAULT_CACHE_LIFETIME",
@@ -111,10 +112,12 @@ class HttpJwkSetSource:
             names a key that is not in it.
         clock: the clock the cache ages by; the system clock by default.
         timeout: how long the default fetch waits for the response.
+        max_response_size: the largest JWK Set the default fetch reads, in bytes;
+            :data:`~easyssf.receiver.transmitter.MAX_RESPONSE_SIZE` if ``None``.
         fetch: how the document at the resolved URL is fetched, a :data:`JwkSetFetch`; a plain
-            ``client.get(url)`` with the ``timeout`` by default. The receiver passes a fetch
-            that goes through ``send`` of ``easyssf.receiver.transmitter`` with the authorizer,
-            the retry options and the URI policy of the transmitter.
+            GET through ``send`` of ``easyssf.receiver.transmitter`` with the ``timeout`` and the
+            ``max_response_size`` by default. The receiver passes a fetch that adds the
+            authorizer, the retry options and the URI policy of the transmitter.
     """
 
     def __init__(
@@ -126,6 +129,7 @@ class HttpJwkSetSource:
         refresh_rate_limit: timedelta = DEFAULT_REFRESH_RATE_LIMIT,
         clock: Clock | None = None,
         timeout: timedelta = DEFAULT_FETCH_TIMEOUT,
+        max_response_size: int | None = None,
         fetch: JwkSetFetch | None = None,
     ) -> None:
         self._client = client
@@ -139,6 +143,7 @@ class HttpJwkSetSource:
         self._refresh_rate_limit = refresh_rate_limit
         self._clock = clock if clock is not None else system_clock
         self._timeout = timeout
+        self._max_response_size = max_response_size
         self._fetch = fetch if fetch is not None else self._get
         self._lock = asyncio.Lock()
         self._url: str | None = None
@@ -204,17 +209,21 @@ class HttpJwkSetSource:
             return keys
 
     async def _get(self, url: str) -> bytes:
-        """The default fetch: a plain GET with the timeout, no redirects (see ``UriPolicy``)."""
-        response = await self._client.get(
-            url, headers={"Accept": JWK_SET_ACCEPT}, timeout=self._timeout.total_seconds()
+        """The default fetch: a plain GET with the timeout and the bounded body, redirects only
+        within the origin (see ``UriPolicy``)."""
+        response = await send(
+            self._client,
+            "GET",
+            url,
+            timeout=self._timeout,
+            max_response_size=self._max_response_size,
+            headers={"Accept": JWK_SET_ACCEPT},
         )
-        if not 200 <= response.status_code < 300:
-            raise httpx.HTTPStatusError(
-                f"the transmitter answered with status {response.status_code}",
-                request=response.request,
-                response=response,
+        if not response.successful:
+            raise TransmitterUnavailableError(
+                None, f"could not retrieve the keys from {url}: the transmitter answered with status {response.status}"
             )
-        return response.content
+        return response.body
 
     def __repr__(self) -> str:
         return f"HttpJwkSetSource(url={self._url or self._fixed!r}, cached={self._keys is not None})"

@@ -13,18 +13,19 @@ from easyssf.core import POLL_URI, Claims, Subject, audiences, event_types, obje
 from easyssf.core.subjects import complex_subject, iss_sub, opaque
 from easyssf.receiver.config import (
     STREAM_MANAGEMENT_RECEIVER,
+    DataSize,
     OAuth2Config,
     ReceiverConfig,
     TransmitterConfig,
     default_receiver_config,
 )
-from easyssf.receiver.errors import ConfigurationError
+from easyssf.receiver.errors import ConfigurationError, TransmitterUnavailableError
 from easyssf.receiver.event import EventContext, for_event
 from easyssf.receiver.poll import InMemoryPollAckStore
 from easyssf.receiver.receiver import Receiver, ReceiverDisabledError, ReceiverHealth
 from easyssf.receiver.revocation import TokenClaims, is_revoked
 from easyssf.receiver.stream import StreamRegistrarState
-from easyssf.receiver.transmitter import HealthStatus, Transmitter
+from easyssf.receiver.transmitter import ClientCredentialsTokenProvider, HealthStatus, Transmitter
 from easyssf.testing import (
     ACCESS_TOKEN,
     AUDIENCE,
@@ -207,6 +208,27 @@ async def test_user_agent_is_sent_when_configured():
     # the application's client is not changed
     assert client.headers.get("User-Agent", "").startswith("python-httpx")
     assert receiver.http_client is not client
+
+
+async def test_max_response_size_bounds_every_call_to_the_transmitter():
+    transmitter = TestTransmitter()
+    config = default_receiver_config()
+    config.transmitter_issuer = transmitter.issuer
+    config.delivery_method = "poll"
+    config.oauth2 = OAuth2Config(token_uri=transmitter.token_url, client_id=CLIENT_ID, client_secret=CLIENT_SECRET)
+    config.stream.management = STREAM_MANAGEMENT_RECEIVER
+    config.http.max_response_size = DataSize(100)
+    receiver = Receiver(config, http_client=transmitter.client)
+    built = receiver.transmitters[0]
+    assert built.metadata is not None and built.metadata.max_response_size == 100
+    assert built.stream_client is not None and built.stream_client.max_response_size == 100
+    assert isinstance(built.tokens, ClientCredentialsTokenProvider)
+    assert built.tokens.options.max_response_size == 100
+    assert built.poller is not None and built.poller.options.max_response_size == 100
+    # the metadata of the test transmitter is larger than 100 bytes
+    with pytest.raises(TransmitterUnavailableError, match="larger than the 100 bytes accepted"):
+        await built.metadata.resolve()
+    assert transmitter.requests == len(built.metadata.metadata_urls), "each location once, not tried again"
 
 
 async def test_receiver_registers_the_aliases_only_after_the_whole_configuration_passed():

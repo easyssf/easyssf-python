@@ -12,7 +12,9 @@ from easyssf.receiver.config import (
     TransmitterConfig,
     default_receiver_config,
     default_transmitter_config,
+    format_data_size,
     format_duration,
+    parse_data_size,
     parse_duration,
     valid_table_prefix,
 )
@@ -30,6 +32,7 @@ def test_config_binds_from_json_with_defaults_and_kebab_case_keys():
         "poll": {"interval": "10s", "long-polling": true, "rate-limit": {"fallback-backoff": "2m"}},
         "set-validation": {"accepted-algorithms": ["RS256", "PS256"], "subject-compatibility": "legacy"},
         "dedup": {"lease": "90s"},
+        "http": {"max-response-size": "1MB"},
         "revocation": {"ttl": "48h"},
         "session-termination": {"scim-attribute-claims": {"userName": "sub"}},
         "data": {"initialize-schema": "always", "table-prefix": "app.ssf_"},
@@ -48,6 +51,7 @@ def test_config_binds_from_json_with_defaults_and_kebab_case_keys():
     assert config.effective_accepted_algorithms == ["RS256", "PS256"]
     assert config.dedup.lease == timedelta(seconds=90)
     assert config.dedup.enabled is True
+    assert config.http.max_response_size == 1 << 20
     assert config.revocation.ttl == timedelta(hours=48)
     assert config.push.endpoint_path == "/ssf/push"
     assert config.transmitters["okta"].transmitter_issuer == "https://okta.example"
@@ -75,6 +79,7 @@ def test_validation_reports_every_failure():
     config.set_validation.accepted_algorithms = ["HS256"]
     config.data.table_prefix = "bad prefix"
     config.data.initialize_schema = "sometimes"
+    config.http.max_response_size = 0  # type: ignore[assignment]
     with pytest.raises(ConfigurationError) as raised:
         config.validate()
     message = str(raised.value)
@@ -88,9 +93,10 @@ def test_validation_reports_every_failure():
         "dedup",
         "data.table-prefix",
         "data.initialize-schema",
+        "http.max-response-size",
     ]:
         assert expected in message, f"missing {expected!r} in {message}"
-    assert len(raised.value.failures) == 8
+    assert len(raised.value.failures) == 9
     assert all(failure.startswith(CONFIGURATION_SECTION + ".") for failure in raised.value.failures)
     # poll without an endpoint
     poll = default_receiver_config()
@@ -555,6 +561,44 @@ def test_format_duration_prints_like_go():
     assert format_duration(timedelta(seconds=1.5)) == "1.5s"
     assert format_duration(timedelta(hours=-1.5)) == "-1h30m0s"
     assert format_duration(timedelta(microseconds=100)) == "100us"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("4MB", 4 << 20),
+        ("512kb", 512 << 10),
+        (" 1 GB ", 1 << 30),
+        ("10B", 10),
+        ("1048576", 1 << 20),
+        ("0", 0),
+        (2048, 2048),
+    ],
+)
+def test_data_size_binds_like_springs_data_size(text, expected):
+    assert parse_data_size(text) == expected
+
+
+@pytest.mark.parametrize("text", ["", "MB", "-1MB", "4 MiB", "1.5MB", "9999999TB", -1, True, 1.5, None])
+def test_parse_data_size_rejects_what_is_not_a_data_size(text):
+    with pytest.raises(ValueError):
+        parse_data_size(text)
+
+
+def test_format_data_size_prints_like_go():
+    assert format_data_size(4 << 20) == "4MB"
+    assert format_data_size(1536) == "1536B"
+    assert format_data_size(1536 << 10) == "1536KB"
+    assert format_data_size(0) == "0B"
+    assert parse_data_size(format_data_size(1536 << 10)) == 1536 << 10
+
+
+def test_from_mapping_reports_a_malformed_data_size_through_validate():
+    config = ReceiverConfig.from_mapping(
+        {"transmitter-issuer": "https://idp.example", "http": {"max-response-size": "4MiB"}}
+    )
+    with pytest.raises(ConfigurationError, match=r"http\.max-response-size: must be a data size"):
+        config.validate()
 
 
 def test_valid_table_prefix():

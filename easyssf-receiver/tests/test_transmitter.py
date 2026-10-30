@@ -13,6 +13,7 @@ import pytest
 
 from easyssf.core import PUSH_URI, SPEC_VERSION_1_0, StreamConfiguration
 from easyssf.core.subjects import iss_sub
+from easyssf.receiver.authorizer import default_retry_options
 from easyssf.receiver.config import default_receiver_config, default_transmitter_config
 from easyssf.receiver.dedup import InMemoryJtiDedupStore
 from easyssf.receiver.errors import ConfigurationError, ErrorCode, TransmitterUnavailableError
@@ -22,10 +23,12 @@ from easyssf.receiver.processor import Processor
 from easyssf.receiver.receiver import Receiver
 from easyssf.receiver.stream import ReceiverStream, StreamClient, StreamError, StreamRegistrar, StreamRegistrarState
 from easyssf.receiver.transmitter import (
+    MAX_RESPONSE_SIZE,
     ClientCredentialsTokenProvider,
     FixedToken,
     HealthStatus,
     MetadataResolver,
+    ResponseTooLargeError,
     Transmitter,
     UriPolicy,
     UriPolicyError,
@@ -540,3 +543,63 @@ async def test_poller_fetches_as_soon_as_the_stream_is_registered():
     await eventually(lambda: test.poll_requests >= 1, what="a poll right after the registration")
     await built.stop()
     assert not poller.is_running and not registrar.is_running, "stopped"
+
+
+class Sized:
+    """Answers every request with metadata padded to ``size`` bytes, with a Content-Length or
+    chunked."""
+
+    def __init__(self, size: int, content_length: bool) -> None:
+        self.size = size
+        self.content_length = content_length
+        self.requests = 0
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests += 1
+        prefix = '{"issuer":"https://transmitter.example","pad":"'
+        body = (prefix + "x" * max(self.size - len(prefix) - 2, 0) + '"}').encode()
+        assert len(body) == self.size
+        if self.content_length:
+            return httpx.Response(200, headers={"Content-Type": "application/json"}, content=body)
+
+        async def chunks():
+            for start in range(0, len(body), 64 << 10):
+                yield body[start : start + (64 << 10)]
+
+        return httpx.Response(200, headers={"Content-Type": "application/json"}, content=chunks())
+
+
+def sized_resolver(transport: Sized, max_response_size: int | None) -> MetadataResolver:
+    return MetadataResolver(
+        "https://transmitter.example",
+        "https://transmitter.example/metadata",
+        httpx.AsyncClient(transport=httpx.MockTransport(transport)),
+        retry=replace(default_retry_options(), initial_backoff=timedelta(milliseconds=1)),
+        max_response_size=max_response_size,
+    )
+
+
+@pytest.mark.parametrize("content_length", [True, False])
+async def test_rejects_response_larger_than_the_maximum(content_length):
+    transport = Sized(101, content_length)
+    with pytest.raises(TransmitterUnavailableError) as raised:
+        await sized_resolver(transport, 100).resolve()
+    assert "larger than the 100 bytes accepted" in str(raised.value)
+    assert transport.requests == 1, "not tried again, a larger response comes again"
+
+
+@pytest.mark.parametrize("content_length", [True, False])
+async def test_accepts_response_of_the_maximum_size(content_length):
+    metadata = await sized_resolver(Sized(100, content_length), 100).resolve()
+    assert metadata.issuer == "https://transmitter.example"
+
+
+async def test_bounds_responses_to_four_mib_by_default():
+    transport = Sized(MAX_RESPONSE_SIZE + 1, False)
+    with pytest.raises(TransmitterUnavailableError, match="larger than the 4194304 bytes"):
+        await sized_resolver(transport, None).resolve()
+
+
+async def test_response_too_large_error_names_the_url_and_the_maximum():
+    error = ResponseTooLargeError("https://transmitter.example/metadata", 100)
+    assert str(error) == "The response of https://transmitter.example/metadata is larger than the 100 bytes accepted"

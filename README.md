@@ -96,7 +96,7 @@ One `uv` workspace, one `easyssf` namespace:
   loopback address or `allow-insecure-http` says otherwise.
 - **Manages its stream** (SSF 1.0, section 8.1): looks a stream up by id, or reuses, updates or
   creates the stream it wants, in the background with retries, learns the audience of the SETs
-  and the poll endpoint from it, refuses a stream the transmitter created with another issuer,
+  and the poll endpoint from it, refuses every stream the transmitter returns with another issuer,
   validates **verification events** by stream and state, and deletes the stream on shutdown when
   asked. The management and poll endpoints are called with a fixed token or one obtained with the
   **client credentials grant**, renewed ahead of its expiry and after a `401`.
@@ -209,7 +209,9 @@ Every setting, with its default, is listed in [Configuration](#configuration) be
 documented on `ReceiverConfig` and its sub-dataclasses; the keys are those of the Java starter,
 the Go, .NET and Rust ports. The HTTP timeout of `easyssf.receiver.http.timeout` applies per call,
 so that a long poll can wait longer; a timeout on the `httpx.AsyncClient` passed as `http_client=`
-caps every call.
+caps every call. A response body larger than `easyssf.receiver.http.max-response-size` (4MB by
+default) is not buffered: the call fails with `ResponseTooLargeError`, as if the transmitter were
+unavailable, and is not tried again.
 
 A management, metadata or JWK Set call that fails with a connection error or a `408`, `429`,
 `500`, `502`, `503` or `504` is tried again, twice by default, after a quarter of a second
@@ -219,7 +221,9 @@ turns it off). Poll requests are not retried: the poller has its interval and pa
 `Retry-After`. The stream registrar keeps retrying a failed registration regardless.
 
 Every endpoint of a transmitter, configured or taken from its metadata or stream, must use
-`https`, or `http` on loopback (`allow-insecure-http` lifts that, for development only). A
+`https`, or `http` on loopback (`allow-insecure-http` lifts that, for development only); the poll
+endpoint is checked before every request that carries the access token, also the one that flushes
+the acknowledgements on shutdown. A
 redirect is followed only within the origin of the request, the same scheme, host and port, and
 only to a scheme the policy allows: an `https` endpoint cannot send the receiver's token to
 `http`, to another host or to another port.
@@ -235,7 +239,8 @@ a transmitter in a customizer.
 
 Every setting of `easyssf.receiver`, with its default, as `ReceiverConfig.from_mapping` reads it
 (kebab-case as shown, snake_case is accepted too; durations as `"30s"`, `"1h30m"` or a number of
-seconds). The settings of a transmitter, from `transmitter-issuer` to `push`, repeat under
+seconds; data sizes as `"4MB"`, `"512KB"` or a number of bytes, the units binary multiples as in
+Spring's `DataSize`). The settings of a transmitter, from `transmitter-issuer` to `push`, repeat under
 `transmitters.<name>` for each further transmitter; the one at the root is named `default`.
 Lists (`events-requested`, `accepted-algorithms`, `understood-subject-members`,
 `session-event-types`, `user-event-types`) mean their default while empty, as in the other
@@ -285,6 +290,7 @@ ports. `ReceiverConfig.validate()` reports every failure at once with its key.
 | `event-aliases.<alias>` | | Aliases for event type URIs, e.g. `AcmeLogin: https://events.acme.example/login`, usable wherever an event type is named. Registered only after the whole configuration passed validation. |
 | `http.timeout` | `5s` | Timeout per call to the transmitter; a long poll waits its hold time plus a margin regardless. |
 | `http.user-agent` | | `User-Agent` header for calls to the transmitter. |
+| `http.max-response-size` | `4MB` | Largest response body accepted from the transmitter (metadata, JWK Set, token, stream configurations, poll responses); a larger one fails the call as if the transmitter were unavailable. |
 | `http.retry.max-retries` | `2` | Retries of a management, metadata or JWK Set call that failed with a connection error or a `408`, `429`, `500`, `502`, `503` or `504`; `0` turns them off. Poll requests are never retried. |
 | `http.retry.initial-backoff` | `250ms` | Pause before the first retry, doubling up to `max-backoff` or the `Retry-After` the transmitter sends. |
 | `http.retry.max-backoff` | `5s` | |

@@ -3,6 +3,7 @@ receiver/stream_test.go of the Go port."""
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -33,7 +34,7 @@ from easyssf.receiver.stream import (
     stream_status_of,
 )
 from easyssf.receiver.transmitter import ClientCredentialsTokenProvider, MetadataResolver, UriPolicy
-from easyssf.testing import CLIENT_ID, CLIENT_SECRET, TestTransmitter, eventually
+from easyssf.testing import CLIENT_ID, CLIENT_SECRET, TestTransmitter, during, eventually
 
 
 def metadata_resolver(transmitter: TestTransmitter) -> MetadataResolver:
@@ -123,6 +124,40 @@ async def test_registrar_deletes_stream_created_with_another_issuer_and_gives_up
     assert transmitter.streams == []
     assert stream.configuration is None
     await registrar.stop()
+
+
+async def test_refuses_existing_streams_with_another_issuer():
+    transmitter = TestTransmitter()
+    transmitter.set_stream_issuer("https://other.example")
+    stream_id = transmitter.add_stream(StreamConfiguration.poll(["CaepSessionRevoked"]).claims)["stream_id"]
+    client = stream_client(transmitter)
+    with pytest.raises(IssuerMismatchError):
+        await client.stream(stream_id)
+    with pytest.raises(IssuerMismatchError):
+        await client.streams()
+    with pytest.raises(IssuerMismatchError):
+        await client.update_stream(stream_id, {"description": "x"})
+    with pytest.raises(IssuerMismatchError):
+        await client.replace_stream(stream_id, StreamConfiguration.poll(["CaepSessionRevoked"]))
+
+
+async def test_registrar_gives_up_on_existing_stream_with_another_issuer_without_deleting_it():
+    transmitter = TestTransmitter()
+    transmitter.set_stream_issuer("https://other.example")
+    stream_id = transmitter.add_stream(StreamConfiguration.poll(["CaepSessionRevoked"]).claims)["stream_id"]
+    for registrar in (
+        StreamRegistrar.for_existing_stream(stream_client(transmitter), ReceiverStream(), stream_id),
+        StreamRegistrar.for_managed_stream(
+            stream_client(transmitter), ReceiverStream(), StreamConfiguration.poll(["CaepSessionRevoked"])
+        ),
+    ):
+        await registrar.start()
+        await eventually(lambda r=registrar: r.state is StreamRegistrarState.FAILED, what="the registrar gave up")
+        await registrar.stop()
+        assert "https://other.example" in registrar.last_error
+        assert registrar.stream.stream_id == ""
+        # the stream is not this registrar's to delete
+        assert len(transmitter.streams) == 1
 
 
 async def test_obtains_new_access_token_when_the_transmitter_rejects_the_current_one():
@@ -256,6 +291,69 @@ async def test_registrar_deletes_managed_stream_on_shutdown_if_asked():
     await keep.register()
     await keep.stop()
     assert len(transmitter.streams) == 1, "kept"
+
+
+async def test_stop_deletes_only_the_stream_published_since_the_last_stop():
+    transmitter = TestTransmitter()
+    client = stream_client(transmitter)
+    registrar = StreamRegistrar.for_managed_stream(
+        client,
+        ReceiverStream(),
+        push_stream("CaepSessionRevoked"),
+        delete_on_shutdown=True,
+        initial_retry_delay=timedelta(milliseconds=10),
+    )
+    await registrar.register()
+    await registrar.stop()
+    assert transmitter.streams == [], "deleted"
+    deletes = 0
+    delete_stream = client.delete_stream
+
+    async def counting(stream_id: str) -> None:
+        nonlocal deletes
+        deletes += 1
+        await delete_stream(stream_id)
+
+    client.delete_stream = counting  # type: ignore[method-assign]
+    await registrar.stop()
+    assert deletes == 0, "not deleted again"
+    # started again, stopped before the registration completed: the old stream is not deleted again
+    transmitter.set_available(False)
+    await registrar.start()
+    await registrar.stop()
+    assert deletes == 0, "nothing published since the last stop"
+
+
+async def test_stream_whose_deletion_is_under_way_is_not_adopted_by_the_next_registration():
+    transmitter = TestTransmitter()
+    client = stream_client(transmitter)
+    stream = ReceiverStream()
+    registrar = StreamRegistrar.for_managed_stream(
+        client, stream, push_stream("CaepSessionRevoked"), delete_on_shutdown=True
+    )
+    await registrar.register()
+    deleted = stream.stream_id
+    deleting = asyncio.Event()
+    proceed = asyncio.Event()
+    delete_stream = client.delete_stream
+
+    async def slow(stream_id: str) -> None:
+        deleting.set()
+        await proceed.wait()
+        await delete_stream(stream_id)
+
+    client.delete_stream = slow  # type: ignore[method-assign]
+    stopping = asyncio.create_task(registrar.stop())
+    await deleting.wait()
+    starting = asyncio.create_task(registrar.start())
+    await during(lambda: not registrar.is_running, timedelta(milliseconds=50), what="start to wait for stop")
+    proceed.set()
+    await stopping
+    await starting
+    await eventually(lambda: registrar.state is StreamRegistrarState.REGISTERED, what="the registration")
+    assert stream.stream_id not in ("", deleted), "a new stream, not the deleted one"
+    assert [s["stream_id"] for s in transmitter.streams] == [stream.stream_id]
+    await registrar.stop()
 
 
 async def test_registrar_starts_again_after_the_context_of_start_was_cancelled():

@@ -102,12 +102,13 @@ def stream_status_of(exc: BaseException | None) -> int:
 
 
 class IssuerMismatchError(EasyssfError):
-    """The transmitter created a stream whose issuer is not the issuer the transmitter metadata
-    was obtained from (SSF 1.0, section 8.1.1.1). Such a stream must not be used.
+    """The transmitter returned a stream whose issuer is not the issuer the transmitter metadata
+    was obtained from (SSF 1.0, section 8.1.1). Such a stream must not be used: its SETs would not
+    verify.
 
     Args:
         expected_issuer: the issuer of the transmitter.
-        stream: the stream the transmitter created, for example to delete it.
+        stream: the stream the transmitter returned, for example to delete it if it was created.
     """
 
     def __init__(self, expected_issuer: str, stream: StreamConfiguration) -> None:
@@ -115,12 +116,12 @@ class IssuerMismatchError(EasyssfError):
         self.expected_issuer = expected_issuer
         """The issuer of the transmitter."""
         self.stream = stream
-        """The stream the transmitter created."""
+        """The stream the transmitter returned."""
 
     def __str__(self) -> str:
-        """Which stream was created with which issuer instead of which."""
+        """Which stream was returned with which issuer instead of which."""
         return (
-            f"The transmitter created stream {self.stream.stream_id} with the issuer {self.stream.issuer!r} "
+            f"The transmitter returned stream {self.stream.stream_id} with the issuer {self.stream.issuer!r} "
             f"instead of {self.expected_issuer!r}"
         )
 
@@ -128,6 +129,9 @@ class IssuerMismatchError(EasyssfError):
 class StreamClient:
     """Calls the stream management API of one transmitter (SSF 1.0, section 8.1): configuration,
     status, subjects and verification. The endpoints are discovered from the transmitter metadata.
+    Every stream configuration the transmitter returns is checked to carry the issuer of the
+    metadata before it is accepted (section 8.1.1): the SETs of a stream with another issuer would
+    not verify.
 
     Args:
         metadata_resolver: finds the endpoints.
@@ -138,6 +142,8 @@ class StreamClient:
         retry: how a failed call is tried again; not at all by default.
         timeout: how long a call waits for the response;
             :data:`~easyssf.receiver.transmitter.DEFAULT_HTTP_TIMEOUT` if ``None``.
+        max_response_size: the largest response read, in bytes;
+            :data:`~easyssf.receiver.transmitter.MAX_RESPONSE_SIZE` if ``None``.
         policy: the URI policy the redirects are checked with; the one of the resolver by default.
     """
 
@@ -149,6 +155,7 @@ class StreamClient:
         *,
         retry: RetryOptions | None = None,
         timeout: timedelta | None = None,
+        max_response_size: int | None = None,
         policy: UriPolicy | None = None,
     ) -> None:
         self._metadata = metadata_resolver
@@ -159,6 +166,8 @@ class StreamClient:
         """How a failed call is tried again."""
         self.timeout = timeout
         """How long a call waits for the response; the default if ``None``."""
+        self.max_response_size = max_response_size
+        """The largest response read, in bytes; the default if ``None``."""
 
     @property
     def metadata_resolver(self) -> MetadataResolver:
@@ -176,7 +185,12 @@ class StreamClient:
         return self._policy if self._policy is not None else self._metadata.policy
 
     async def streams(self) -> list[StreamConfiguration]:
-        """Lists the streams of this receiver (``GET configuration_endpoint``)."""
+        """Lists the streams of this receiver (``GET configuration_endpoint``).
+
+        Raises:
+            IssuerMismatchError: if a stream has another issuer than the transmitter.
+            StreamError: if the call failed.
+        """
         endpoint = await self._configuration_endpoint()
         body = await self._exchange("GET", endpoint, None, Endpoint.CONFIGURATION)
         if not body.strip():
@@ -186,16 +200,21 @@ class StreamClient:
         except ValueError as error:
             raise StreamError(0, error, "The transmitter returned an invalid list of streams") from error
         if isinstance(parsed, list):
-            return [StreamConfiguration(element) for element in parsed if isinstance(element, dict)]
+            return [self._check_issuer(StreamConfiguration(element)) for element in parsed if isinstance(element, dict)]
         if isinstance(parsed, dict):
-            return [StreamConfiguration(parsed)]
+            return [self._check_issuer(StreamConfiguration(parsed))]
         raise StreamError(0, None, "The transmitter returned an invalid list of streams")
 
     async def stream(self, stream_id: str) -> StreamConfiguration:
-        """Reads the stream with the given identifier (``GET configuration_endpoint?stream_id=``)."""
+        """Reads the stream with the given identifier (``GET configuration_endpoint?stream_id=``).
+
+        Raises:
+            IssuerMismatchError: if the stream has another issuer than the transmitter.
+            StreamError: if the call failed.
+        """
         endpoint = await self._configuration_endpoint()
         body = await self._exchange("GET", _with_stream_id_query(endpoint, stream_id), None, Endpoint.CONFIGURATION)
-        return _parse_stream(body)
+        return self._check_issuer(_parse_stream(body))
 
     async def create_stream(self, stream: StreamConfiguration) -> StreamConfiguration:
         """Creates a stream (``POST configuration_endpoint``), see
@@ -208,23 +227,38 @@ class StreamClient:
         """
         endpoint = await self._configuration_endpoint()
         body = await self._exchange("POST", endpoint, stream.claims, Endpoint.CONFIGURATION)
-        created = _parse_stream(body)
-        if created.issuer != self._metadata.issuer:
-            raise IssuerMismatchError(self._metadata.issuer, created)
-        return created
+        return self._check_issuer(_parse_stream(body))
 
     async def update_stream(self, stream_id: str, changes: Claims) -> StreamConfiguration:
         """Updates the given members of a stream (``PATCH configuration_endpoint``), the others
-        are left as they are."""
+        are left as they are.
+
+        Raises:
+            IssuerMismatchError: if the stream has another issuer than the transmitter.
+            StreamError: if the call failed.
+        """
         endpoint = await self._configuration_endpoint()
         body = await self._exchange("PATCH", endpoint, _with_stream_id(changes, stream_id), Endpoint.CONFIGURATION)
-        return _parse_stream(body)
+        return self._check_issuer(_parse_stream(body))
 
     async def replace_stream(self, stream_id: str, stream: StreamConfiguration) -> StreamConfiguration:
-        """Replaces the configuration of a stream (``PUT configuration_endpoint``)."""
+        """Replaces the configuration of a stream (``PUT configuration_endpoint``).
+
+        Raises:
+            IssuerMismatchError: if the stream has another issuer than the transmitter.
+            StreamError: if the call failed.
+        """
         endpoint = await self._configuration_endpoint()
         body = await self._exchange("PUT", endpoint, _with_stream_id(stream.claims, stream_id), Endpoint.CONFIGURATION)
-        return _parse_stream(body)
+        return self._check_issuer(_parse_stream(body))
+
+    def _check_issuer(self, stream: StreamConfiguration) -> StreamConfiguration:
+        """A stream belongs to the transmitter the metadata was obtained from (SSF 1.0, section
+        8.1.1, ``iss``); SETs of a stream with another issuer would not verify against that
+        transmitter's keys and issuer, so such a stream is refused wherever it comes from."""
+        if stream.issuer != self._metadata.issuer:
+            raise IssuerMismatchError(self._metadata.issuer, stream)
+        return stream
 
     async def delete_stream(self, stream_id: str) -> None:
         """Deletes a stream (``DELETE configuration_endpoint?stream_id=``)."""
@@ -298,6 +332,7 @@ class StreamClient:
                 policy=self.policy,
                 retry=self.retry,
                 timeout=self.timeout,
+                max_response_size=self.max_response_size,
                 json_body=json_body,
                 endpoint=endpoint,
             )
@@ -553,6 +588,12 @@ class StreamRegistrar:
         self._last_error = ""
         self._listeners: list[StreamListener] = []
         self._task: asyncio.Task[None] | None = None
+        # start and stop exclude each other, so that a registration started while stop deletes
+        # the stream does not find and adopt the stream being deleted
+        self._lifecycle = asyncio.Lock()
+        # whether a stream was published since the last stop: the receiver keeps the stream
+        # after stop, and stop deletes only one it has not deleted before
+        self._published = False
 
     @classmethod
     def for_existing_stream(
@@ -630,23 +671,28 @@ class StreamRegistrar:
     async def start(self) -> None:
         """Starts looking up or registering the stream in the background; returns at once.
         :meth:`stop` ends the retries. Calling it again while running has no effect; once the
-        task ended, :meth:`start` starts it again."""
-        if self.is_running:
-            return
-        self._state = StreamRegistrarState.REGISTERING
-        self._task = asyncio.create_task(self._register_with_retries(), name="easyssf-stream-registrar")
+        task ended, :meth:`start` starts it again. While :meth:`stop` is under way, it waits for
+        it to finish, so that a stream being deleted is not adopted."""
+        async with self._lifecycle:
+            if self.is_running:
+                return
+            self._state = StreamRegistrarState.REGISTERING
+            self._task = asyncio.create_task(self._register_with_retries(), name="easyssf-stream-registrar")
 
     async def stop(self) -> None:
         """Stops the background registration and, if :attr:`delete_on_shutdown` says so, deletes a
-        stream the receiver manages."""
-        task, self._task = self._task, None
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        if self.delete_on_shutdown and self._desired is not None:
+        stream the receiver manages: the one published since the last :meth:`stop`, not again one
+        a previous :meth:`stop` deleted. A registration in flight is cancelled and publishes
+        nothing."""
+        async with self._lifecycle:
+            task, self._task = self._task, None
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            published, self._published = self._published, False
             stream_id = self._stream.stream_id
-            if stream_id:
+            if self.delete_on_shutdown and self._desired is not None and published and stream_id:
                 try:
                     await self._client.delete_stream(stream_id)
                 except Exception as error:
@@ -666,17 +712,9 @@ class StreamRegistrar:
                     await self.register()
                     return
                 except IssuerMismatchError as mismatch:
-                    # trying again would only create another stream that must not be used
+                    # trying again would only find or create the same stream
                     self.logger.error("Not using the SSF stream", extra={"error": mismatch})
                     self._state, self._last_error = StreamRegistrarState.FAILED, str(mismatch)
-                    stream_id = mismatch.stream.stream_id
-                    if stream_id:
-                        try:
-                            await self._client.delete_stream(stream_id)
-                        except Exception as error:
-                            self.logger.warning(
-                                "Could not delete SSF stream", extra={"stream": stream_id, "error": error}
-                            )
                     return
                 except Exception as error:
                     self._state, self._last_error = StreamRegistrarState.REGISTERING, str(error)
@@ -696,7 +734,8 @@ class StreamRegistrar:
 
         Raises:
             StreamError: if the transmitter could not be called or answered with an error.
-            IssuerMismatchError: if the transmitter created the stream with another issuer.
+            IssuerMismatchError: if the stream has another issuer than the transmitter; a stream
+                created on the way is deleted again, an existing one is left alone.
         """
         if self._desired is None:
             stream = await self._client.stream(self._existing_id)
@@ -704,6 +743,7 @@ class StreamRegistrar:
         else:
             stream, action = await self._register_managed(self._desired)
         self._stream.set_configuration(stream)
+        self._published = True
         self.logger.info(
             action + " SSF stream",
             extra={
@@ -729,11 +769,24 @@ class StreamRegistrar:
             return await self._client.update_stream(existing.stream_id, changes_for(desired)), "Updated"
         try:
             return await self._client.create_stream(desired), "Created"
+        except IssuerMismatchError as mismatch:
+            # the stream was created but must not be used, and trying again would only create
+            # another one
+            await self._delete_quietly(mismatch.stream.stream_id)
+            raise
         except StreamError as error:
             # the transmitter allows a single stream per receiver and it is configured differently
             if error.status == 409 and len(streams) == 1:
                 return await self._client.update_stream(streams[0].stream_id, changes_for(desired)), "Updated"
             raise
+
+    async def _delete_quietly(self, stream_id: str) -> None:
+        if not stream_id:
+            return
+        try:
+            await self._client.delete_stream(stream_id)
+        except Exception as error:
+            self.logger.warning("Could not delete SSF stream", extra={"stream": stream_id, "error": error})
 
     def __repr__(self) -> str:
         return f"StreamRegistrar(state={self._state}, stream={self._stream.stream_id!r})"

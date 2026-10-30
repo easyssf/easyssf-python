@@ -215,4 +215,4 @@ async def test_default_fetch_asks_for_a_jwk_set_and_rejects_non_2xx_answers():
     missing = HttpJwkSetSource(client, "https://keys.example/missing")
     with pytest.raises(TransmitterUnavailableError) as unavailable:
         await missing.jwk_set()
-    assert isinstance(unavailable.value.cause, httpx.HTTPStatusError)
+    assert "status 404" in str(unavailable.value)

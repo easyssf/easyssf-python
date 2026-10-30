@@ -56,6 +56,7 @@ __all__ = [
     "HttpResponse",
     "MetadataResolver",
     "NoToken",
+    "ResponseTooLargeError",
     "TokenProvider",
     "Transmitter",
     "TransmitterHealth",
@@ -82,8 +83,10 @@ LONG_POLL_MARGIN: Final = timedelta(seconds=10)
 that the transmitter answers before the receiver gives up (RFC 8936, section 2.5)."""
 
 MAX_RESPONSE_SIZE: Final = 4 << 20
-"""What the receiver reads of a response at most: metadata, JWK Sets and poll responses are
-small, and an endpoint must not be able to exhaust the receiver's memory."""
+"""How large a response body may be when nothing else is configured
+(``easyssf.receiver.http.max-response-size``): 4 MiB, as in the Java library. Metadata, JWK Sets,
+stream configurations and poll responses stay far below it, and an endpoint must not be able to
+exhaust the receiver's memory."""
 
 MAX_REDIRECTS: Final = 10
 """How many redirects of one call are followed at most."""
@@ -96,6 +99,28 @@ class UriPolicyError(EasyssfError, ValueError):
     """A URL is not acceptable to the :class:`UriPolicy`: not absolute, with a fragment where none
     is allowed, not https where https is required, or a redirect that leaves the origin. A
     ``ValueError`` as well, as any other invalid value."""
+
+
+class ResponseTooLargeError(EasyssfError):
+    """The response body of a call to the transmitter is larger than the maximum
+    (``easyssf.receiver.http.max-response-size``). The body is not buffered and the call fails as
+    if no response was received; it is not tried again, the transmitter would send the same.
+
+    Args:
+        url: where the response came from.
+        max_size: the largest body accepted, in bytes.
+    """
+
+    def __init__(self, url: str, max_size: int) -> None:
+        super().__init__(url, max_size)
+        self.url = url
+        """Where the response came from."""
+        self.max_size = max_size
+        """The largest body accepted, in bytes."""
+
+    def __str__(self) -> str:
+        """Which response was larger than how many bytes."""
+        return f"The response of {self.url} is larger than the {self.max_size} bytes accepted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +288,8 @@ class MetadataResolver:
         timeout: how long a fetch waits for the response; :data:`DEFAULT_HTTP_TIMEOUT` if ``None``.
         authorizer: adds what the fetch needs, for example an API key; nothing if ``None``.
         retry: how a failed fetch is tried again; not at all by default.
+        max_response_size: the largest metadata document read, in bytes;
+            :data:`MAX_RESPONSE_SIZE` if ``None``.
 
     Raises:
         UriPolicyError: if the issuer or the metadata URL is not acceptable to the policy.
@@ -279,6 +306,7 @@ class MetadataResolver:
         timeout: timedelta | None = None,
         authorizer: Authorizer | None = None,
         retry: RetryOptions | None = None,
+        max_response_size: int | None = None,
     ) -> None:
         self._policy = policy if policy is not None else UriPolicy()
         self._policy.check_issuer(issuer)
@@ -297,6 +325,8 @@ class MetadataResolver:
         """Adds what the fetch needs, for example an API key; nothing if ``None``."""
         self.retry = retry if retry is not None else RetryOptions()
         """How a failed fetch is tried again."""
+        self.max_response_size = max_response_size
+        """The largest metadata document read, in bytes; :data:`MAX_RESPONSE_SIZE` if ``None``."""
         self._lock = asyncio.Lock()
         self._metadata: TransmitterMetadata | None = None
         self._warned = False
@@ -359,6 +389,7 @@ class MetadataResolver:
             policy=self._policy,
             retry=self.retry,
             timeout=self.timeout,
+            max_response_size=self.max_response_size,
             endpoint=Endpoint.METADATA,
         )
         try:
@@ -414,7 +445,7 @@ class HttpResponse:
     headers: httpx.Headers
     """The response headers."""
     body: bytes
-    """The body, at most :data:`MAX_RESPONSE_SIZE` bytes of it."""
+    """The body, at most as large as the call allowed, :data:`MAX_RESPONSE_SIZE` bytes by default."""
 
     @property
     def successful(self) -> bool:
@@ -435,6 +466,7 @@ async def send(
     authorizer: Authorizer | None = None,
     policy: UriPolicy | None = None,
     timeout: timedelta | None = None,
+    max_response_size: int | None = None,
     headers: dict[str, str] | None = None,
     body: bytes | None = None,
     endpoint: str = "",
@@ -442,12 +474,14 @@ async def send(
     """Performs one request and returns the response whatever its status. The request is
     authorized by ``authorizer`` if given, marked as being for ``endpoint`` (see
     :class:`~easyssf.receiver.authorizer.Endpoint`), waits ``timeout``
-    (:data:`DEFAULT_HTTP_TIMEOUT` if ``None``) for the response, and its body is bounded by
-    :data:`MAX_RESPONSE_SIZE`. A redirect is followed by hand, only within the origin and only
-    where the policy allows, see :meth:`UriPolicy.check_redirect`.
+    (:data:`DEFAULT_HTTP_TIMEOUT` if ``None``) for the response, and its body may be at most
+    ``max_response_size`` bytes (:data:`MAX_RESPONSE_SIZE` if ``None``). A redirect is followed by
+    hand, only within the origin and only where the policy allows, see
+    :meth:`UriPolicy.check_redirect`.
 
     Raises:
         httpx.TransportError: if no response was received.
+        ResponseTooLargeError: if the response body is larger than ``max_response_size``.
         TimeoutError: if the response did not arrive in time.
         TransmitterUnavailableError: if the authorizer could not authorize the request.
         UriPolicyError: if the transmitter redirected to where the policy does not follow.
@@ -455,6 +489,7 @@ async def send(
     policy = policy if policy is not None else UriPolicy()
     wait = timeout if timeout is not None and timeout > timedelta(0) else DEFAULT_HTTP_TIMEOUT
     seconds = wait.total_seconds()
+    limit = max_response_size if max_response_size is not None and max_response_size > 0 else MAX_RESPONSE_SIZE
     target = url
     followed = 0
     async with asyncio.timeout(seconds):
@@ -467,7 +502,7 @@ async def send(
             try:
                 next_request = response.next_request
                 if next_request is None:
-                    data = await _read_bounded(response)
+                    data = await _read_bounded(response, limit, target)
                     return HttpResponse(response.status_code, response.headers, data)
             finally:
                 await response.aclose()
@@ -478,16 +513,22 @@ async def send(
                 method, body = next_request.method, None
 
 
-async def _read_bounded(response: httpx.Response) -> bytes:
+async def _read_bounded(response: httpx.Response, limit: int, url: str) -> bytes:
+    """The body, read only as far as ``limit`` allows: a larger one fails the call instead of being
+    buffered or cut off."""
+    declared = response.headers.get("Content-Length", "").strip()
+    if declared.isdigit() and int(declared) > limit:
+        raise ResponseTooLargeError(url, limit)
     if response.is_stream_consumed:
         # a response built with its content, as an in-process transport answers
-        return response.content[:MAX_RESPONSE_SIZE]
+        if len(response.content) > limit:
+            raise ResponseTooLargeError(url, limit)
+        return response.content
     data = bytearray()
     async for chunk in response.aiter_bytes():
         data += chunk
-        if len(data) >= MAX_RESPONSE_SIZE:
-            del data[MAX_RESPONSE_SIZE:]
-            break
+        if len(data) > limit:
+            raise ResponseTooLargeError(url, limit)
     return bytes(data)
 
 
@@ -499,6 +540,7 @@ async def get_json(
     policy: UriPolicy | None = None,
     retry: RetryOptions | None = None,
     timeout: timedelta | None = None,
+    max_response_size: int | None = None,
     accept: str = _JSON,
     endpoint: str = "",
 ) -> bytes:
@@ -507,7 +549,7 @@ async def get_json(
     Raises:
         TransmitterUnavailableError: if the transmitter answered with another status, or the
             request could not be authorized.
-        httpx.TransportError, TimeoutError, UriPolicyError: as :func:`send`.
+        httpx.TransportError, ResponseTooLargeError, TimeoutError, UriPolicyError: as :func:`send`.
     """
     options = retry if retry is not None else RetryOptions()
 
@@ -519,6 +561,7 @@ async def get_json(
             authorizer=authorizer,
             policy=policy,
             timeout=timeout,
+            max_response_size=max_response_size,
             headers={"Accept": accept},
             endpoint=endpoint,
         )
@@ -538,6 +581,7 @@ async def exchange(
     policy: UriPolicy | None = None,
     retry: RetryOptions | None = None,
     timeout: timedelta | None = None,
+    max_response_size: int | None = None,
     json_body: bytes | None = None,
     endpoint: str = "",
 ) -> HttpResponse:
@@ -549,7 +593,7 @@ async def exchange(
 
     Raises:
         TransmitterUnavailableError: if the request could not be authorized.
-        httpx.TransportError, TimeoutError, UriPolicyError: as :func:`send`.
+        httpx.TransportError, ResponseTooLargeError, TimeoutError, UriPolicyError: as :func:`send`.
     """
     options = retry if retry is not None else RetryOptions()
     headers = {"Accept": _JSON}
@@ -564,6 +608,7 @@ async def exchange(
             authorizer=authorizer,
             policy=policy,
             timeout=timeout,
+            max_response_size=max_response_size,
             headers=headers,
             body=json_body,
             endpoint=endpoint,
@@ -655,6 +700,8 @@ class ClientCredentialsOptions:
     on loopback) by default."""
     timeout: timedelta | None = None
     """How long the token request waits; :data:`DEFAULT_HTTP_TIMEOUT` if ``None``."""
+    max_response_size: int | None = None
+    """The largest token response read, in bytes; :data:`MAX_RESPONSE_SIZE` if ``None``."""
     clock: Clock = system_clock
     """The clock the expiry is measured by."""
 
@@ -750,11 +797,12 @@ class ClientCredentialsTokenProvider:
                 self._token_url,
                 policy=self._options.policy,
                 timeout=self._options.timeout,
+                max_response_size=self._options.max_response_size,
                 headers=headers,
                 body=urlencode(form).encode(),
                 endpoint=Endpoint.TOKEN,
             )
-        except (httpx.TransportError, TimeoutError, UriPolicyError) as error:
+        except (httpx.TransportError, ResponseTooLargeError, TimeoutError, UriPolicyError) as error:
             raise TransmitterUnavailableError(error, failure) from error
         if not response.successful:
             raise TransmitterUnavailableError(

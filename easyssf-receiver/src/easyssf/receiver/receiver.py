@@ -312,6 +312,7 @@ class Receiver:
         described = self._describe(name, issuer)
         policy = UriPolicy(allow_insecure_http=config.allow_insecure_http)
         timeout = self._config.http.timeout
+        max_response_size = self._config.http.max_response_size
         retry = RetryOptions.from_config(self._config.http.retry)
         # the configured headers go with every call, also those for metadata and keys that need no
         # token
@@ -325,6 +326,7 @@ class Receiver:
             timeout=timeout,
             authorizer=headers,
             retry=retry,
+            max_response_size=max_response_size,
         )
         self._log.info(
             "SSF transmitter: metadata is resolved from %s",
@@ -338,10 +340,18 @@ class Receiver:
                 extra={"transmitter": described},
             )
 
-        tokens = self._token_provider(config, timeout, policy)
+        tokens = self._token_provider(config, timeout, max_response_size, policy)
         authorizer = Authorizers(headers, BearerToken(tokens))
         stream = ReceiverStream()
-        stream_client = StreamClient(metadata, self._client, authorizer, retry=retry, timeout=timeout, policy=policy)
+        stream_client = StreamClient(
+            metadata,
+            self._client,
+            authorizer,
+            retry=retry,
+            timeout=timeout,
+            max_response_size=max_response_size,
+            policy=policy,
+        )
         verification = StreamVerification(lambda: stream.stream_id, logger=self._log)
         transmitter = Transmitter(
             name=name,
@@ -369,6 +379,7 @@ class Receiver:
                 policy=policy,
                 retry=retry,
                 timeout=timeout,
+                max_response_size=max_response_size,
                 accept=JWK_SET_ACCEPT,
                 endpoint=Endpoint.JWKS,
             )
@@ -461,6 +472,7 @@ class Receiver:
                 metrics=self._metrics,
                 transmitter=issuer,
                 timeout=timeout,
+                max_response_size=max_response_size,
                 policy=policy,
                 clock=self._clock,
                 logger=self._log,
@@ -473,7 +485,9 @@ class Receiver:
             transmitter.poller = Poller(client, authorizer, endpoint, self._processor, poller_options)
         return transmitter
 
-    def _token_provider(self, config: TransmitterConfig, timeout: timedelta, policy: UriPolicy) -> TokenProvider:
+    def _token_provider(
+        self, config: TransmitterConfig, timeout: timedelta, max_response_size: int, policy: UriPolicy
+    ) -> TokenProvider:
         token = config.transmitter_access_token.strip()
         if token:
             return FixedToken(token)
@@ -488,6 +502,7 @@ class Receiver:
             expiry_safety_window=config.oauth2.expiry_safety_window,
             additional_parameters=tuple(config.oauth2.additional_parameters.items()),
             timeout=timeout,
+            max_response_size=max_response_size,
             clock=self._clock,
         )
         return ClientCredentialsTokenProvider(

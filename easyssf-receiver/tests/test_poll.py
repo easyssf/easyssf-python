@@ -140,6 +140,7 @@ async def test_reports_invalid_set_to_the_transmitter():
     p = poller(transmitter, recorder)
     claims = transmitter.set_claims("CaepSessionRevoked", alice(transmitter))
     claims["aud"] = "https://other.example"
+    claims["jti"] = "bad"
     transmitter.queue_set_with_jti("bad", transmitter.sign_set(claims))
     transmitter.queue_set_with_jti("garbage", "not a set")
     assert await p.poll_now() == 2
@@ -147,6 +148,25 @@ async def test_reports_invalid_set_to_the_transmitter():
     codes = {reported.jti: reported.code for reported in transmitter.reported_errors}
     assert codes == {"bad": ErrorCode.INVALID_AUDIENCE, "garbage": ErrorCode.INVALID_REQUEST}
     assert transmitter.acknowledged_sets == []
+
+
+async def test_reports_set_whose_jti_differs_from_the_key_it_is_listed_under_without_handling_it():
+    transmitter = TestTransmitter()
+    recorder = Recorder()
+    p = poller(transmitter, recorder)
+    encoded_set = transmitter.set("CaepSessionRevoked", alice(transmitter))
+    jti = str(claims_of(encoded_set)["jti"])
+    transmitter.queue_set_with_jti("another-key", encoded_set)
+    valid = queue(transmitter)
+    assert await p.poll_now() == 2
+    # the SET is not handled, and the error names the key so that the transmitter drops it
+    assert recorder.count == 1
+    assert transmitter.acknowledged_sets == [valid]
+    assert [(reported.jti, reported.code) for reported in transmitter.reported_errors] == [
+        ("another-key", ErrorCode.INVALID_REQUEST)
+    ]
+    assert jti in transmitter.reported_errors[0].description
+    assert "another-key" in transmitter.reported_errors[0].description
 
 
 async def test_does_not_acknowledge_set_that_could_not_be_handled_so_that_it_is_delivered_again():
@@ -525,6 +545,19 @@ async def test_poller_refuses_poll_endpoint_the_policy_forbids():
     with pytest.raises(UriPolicyError, match="https"):
         await p.poll_now()
     assert transmitter.poll_requests == 0
+
+
+async def test_does_not_flush_acknowledgements_on_stop_to_a_poll_endpoint_without_tls():
+    # the stream moved to plain http after the acknowledgements were recorded
+    transmitter = TestTransmitter()
+    store = InMemoryPollAckStore()
+    options = replace(poller_options(), ack_store=store, transmitter=transmitter.issuer)
+    insecure = transmitter.poll_url.replace("https://", "http://")
+    p = Poller(transmitter.client, FixedToken(ACCESS_TOKEN), lambda: insecure, processor(transmitter), options)
+    await store.record(transmitter.issuer, PendingAck.ack("owed"))
+    await p.stop()
+    assert transmitter.poll_requests == 0, "the access token stayed home"
+    assert await store.size(transmitter.issuer) == 1, "still owed"
 
 
 def test_poller_refuses_options_out_of_range():

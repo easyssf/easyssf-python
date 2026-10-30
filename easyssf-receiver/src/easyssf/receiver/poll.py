@@ -21,14 +21,15 @@ from typing import Any, Final, Protocol, TypeAlias
 
 import httpx
 
-from easyssf.core import Claims, DeliveryMethod, object_member
+from easyssf.core import Claims, DeliveryMethod, object_member, string_member
 
 from .authorizer import Authorizer, BearerToken, Endpoint, RetryOptions
 from .config import PollConfig
-from .errors import Clock, EasyssfError, InProgressError, RejectedError, system_clock
-from .metrics import Metrics, NoopMetrics
+from .errors import Clock, EasyssfError, ErrorCode, InProgressError, RejectedError, system_clock
+from .metrics import Metrics, NoopMetrics, SetOutcome
 from .processor import Processor
 from .transmitter import LONG_POLL_MARGIN, HttpResponse, TokenProvider, UriPolicy, exchange
+from .verifier import unverified_payload
 
 __all__ = [
     "InMemoryPollAckStore",
@@ -210,6 +211,9 @@ class PollerOptions:
     timeout: timedelta | None = None
     """How long a request that is answered immediately waits for the response;
     :data:`~easyssf.receiver.transmitter.DEFAULT_HTTP_TIMEOUT` if ``None``."""
+    max_response_size: int | None = None
+    """The largest poll response read, in bytes;
+    :data:`~easyssf.receiver.transmitter.MAX_RESPONSE_SIZE` if ``None``."""
     clock: Clock = system_clock
     """The clock the pauses the transmitter asks for are measured by."""
     logger: logging.Logger | None = None
@@ -501,9 +505,6 @@ class Poller:
         if not endpoint:
             self._log.debug("Not polling, the poll endpoint of the SSF stream is not known yet")
             return _PollResult(skipped=True, endpoint_unknown=True)
-        # the endpoint of a registered stream comes from the transmitter: checked like a configured
-        # one, the receiver's token must not go to http
-        self._options.policy.check_endpoint(endpoint, "the poll endpoint of the SSF stream")
         until = self.paused_until
         if until is not None:
             self._log.debug("Not polling, the SSF transmitter asked to wait", extra={"until": until})
@@ -549,6 +550,17 @@ class Poller:
             return 0
 
     async def _process(self, key: str, jti: str, encoded_set: str) -> None:
+        # the key of a SET in the response is its jti (RFC 8936, section 2.4). A SET listed under
+        # another key would be acknowledged under a key that is not its own, so it is reported
+        # under that key instead of handled; one that does not parse is left to the verifier,
+        # which rejects it the same way
+        set_jti = string_member(unverified_payload(encoded_set), "jti")
+        if set_jti and set_jti != jti:
+            message = f"The SET has the jti {set_jti!r} but is listed under {jti!r}"
+            self._log.warning("Rejecting polled SET: %s", message, extra={"jti": jti})
+            self._metrics.set_received(self._options.transmitter, DeliveryMethod.POLL, SetOutcome.INVALID)
+            await self._record(key, PendingAck.ack_error(jti, ErrorCode.INVALID_REQUEST, message))
+            return
         ack: PendingAck | None = None
         try:
             await self._processor.process(encoded_set, DeliveryMethod.POLL)
@@ -568,13 +580,17 @@ class Poller:
             else:
                 # not acknowledged, the transmitter delivers the SET again
                 self._log.warning("Could not process polled SET: %s", error, extra={"jti": jti, "error": error})
-        if ack is None:
-            return
+        if ack is not None:
+            await self._record(key, ack)
+
+    async def _record(self, key: str, ack: PendingAck) -> None:
         try:
             await self._store.record(key, ack)
         except Exception as error:  # the SET is delivered again
             self._log.warning(
-                "Could not record the acknowledgement of the polled SET: %s", error, extra={"jti": jti, "error": error}
+                "Could not record the acknowledgement of the polled SET: %s",
+                error,
+                extra={"jti": ack.jti, "error": error},
             )
         await self._report_pending(key)
 
@@ -587,8 +603,13 @@ class Poller:
 
     async def _request(self, endpoint: str, key: str, max_events: int, return_immediately: bool) -> Claims:
         """Sends one poll request with the pending acknowledgements and returns the parsed
-        response body."""
+        response body: the one method that sends a poll request, for a poll as well as for the
+        acknowledgements flushed on :meth:`stop`, so that no path sends the access token around
+        the URI policy."""
         options = self._options
+        # the endpoint of a registered stream comes from the transmitter: checked like a configured
+        # one, the receiver's token must not go to http
+        options.policy.check_endpoint(endpoint, "the poll endpoint of the SSF stream")
         try:
             pending = await self._store.pending(key, options.max_ack_batch)
         except Exception as error:
@@ -622,6 +643,7 @@ class Poller:
                 policy=options.policy,
                 retry=RetryOptions(),
                 timeout=timeout,
+                max_response_size=options.max_response_size,
                 json_body=json.dumps(body, separators=(",", ":")).encode(),
                 endpoint=Endpoint.POLL,
             )
