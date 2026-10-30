@@ -469,7 +469,7 @@ wheels = [
 
 [[package]]
 name = "easyssf-conformance"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "conformance" }
 dependencies = [
     { name = "easyssf-core" },
@@ -492,7 +492,7 @@ requires-dist = [
 
 [[package]]
 name = "easyssf-core"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "easyssf-core" }
 
 [package.optional-dependencies]
@@ -506,7 +506,7 @@ provides-extras = ["signing"]
 
 [[package]]
 name = "easyssf-python"
-version = "0.6.0"
+version = "0.7.0"
 source = { virtual = "." }
 dependencies = [
     { name = "easyssf-conformance" },
@@ -547,7 +547,7 @@ dev = [
 
 [[package]]
 name = "easyssf-receiver"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "easyssf-receiver" }
 dependencies = [
     { name = "easyssf-core" },
@@ -572,7 +572,7 @@ dev = [{ name = "easyssf-test", editable = "easyssf-test" }]
 
 [[package]]
 name = "easyssf-receiver-fastapi"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "easyssf-receiver-fastapi" }
 dependencies = [
     { name = "easyssf-receiver" },
@@ -599,7 +599,7 @@ dev = [
 
 [[package]]
 name = "easyssf-test"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "easyssf-test" }
 dependencies = [
     { name = "easyssf-core", extra = ["signing"] },
@@ -616,7 +616,7 @@ requires-dist = [
 
 [[package]]
 name = "example-fastapi-resource-server"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "examples/fastapi/resource-server" }
 dependencies = [
     { name = "easyssf-receiver" },

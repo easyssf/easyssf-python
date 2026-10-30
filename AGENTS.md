@@ -11,7 +11,7 @@ Events (RFC 9967): a framework independent, asyncio based **receiver** library, 
 Flask, FastAPI, Litestar and SQLAlchemy, and an in-process test transmitter. The code sits in the
 authentication path of its users, so correctness of verification beats convenience everywhere.
 Receiver only, no transmitter. Apache-2.0. Status: pre-1.0, the version follows the Java library
-(0.6.0), breaking changes are acceptable when the CHANGELOG says so.
+(0.7.0), breaking changes are acceptable when the CHANGELOG says so.
 
 This is a port of [easyssf for Java](https://github.com/easyssf/easyssf), following the playbook
 of [easyssf-go](https://github.com/easyssf/easyssf-go), [easyssf-rust](https://github.com/easyssf/easyssf-rust)

@@ -45,7 +45,7 @@ The same on any other framework: `await receiver.start()` when the application s
 `await receiver.aclose()` when it stops, and the ASGI app `easyssf.receiver.asgi.push_app(receiver.push_handler)`
 (or `easyssf.receiver.wsgi.push_wsgi_app`) mounted at `receiver.push_endpoint_path`.
 
-Version 0.6.0 is at feature parity with [easyssf 0.6.0 for Java](https://github.com/easyssf/easyssf);
+Version 0.7.0 is at feature parity with [easyssf 0.7.0 for Java](https://github.com/easyssf/easyssf);
 the version follows the Java library, and below 1.0 a release may break the API when the
 CHANGELOG says so. Python 3.11 or later, Apache-2.0.
 

@@ -1,6 +1,6 @@
 [project]
 name = "easyssf-python"
-version = "0.6.0"
+version = "0.7.0"
 description = "Workspace root of easyssf for Python: not published, see the packages"
 requires-python = ">=3.11"
 license = "Apache-2.0"

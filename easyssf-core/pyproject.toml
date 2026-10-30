@@ -1,6 +1,6 @@
 [project]
 name = "easyssf-core"
-version = "0.6.0"
+version = "0.7.0"
 description = "The vocabulary of the OpenID Shared Signals Framework: SETs, subjects, event types, the typed CAEP, RISC and SCIM events, stream configuration and transmitter metadata"
 readme = "README.md"
 requires-python = ">=3.11"

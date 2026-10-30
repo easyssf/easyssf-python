@@ -51,8 +51,8 @@ All notable changes to this project are documented in this file. The format foll
 - `Receiver.start()` rolls back when a transmitter fails to start: the transmitters started before
   it are stopped again and the receiver is left stopped, so that `start()` can be tried again
   instead of doing nothing.
-- The distributions pin each other to the `0.6` series (`easyssf-core>=0.6,<0.7`,
-  `easyssf-receiver>=0.6,<0.7`), and CI installs the built wheels in a clean environment.
+- The distributions pin each other to the `0.7` series (`easyssf-core>=0.7,<0.8`,
+  `easyssf-receiver>=0.7,<0.8`), and CI installs the built wheels in a clean environment.
 
 ### Fixed
 
@@ -72,7 +72,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
-- The port of easyssf 0.6.0 for Java to Python, after the Go, .NET and Rust ports: `easyssf-core`
+- The port of easyssf 0.7.0 for Java to Python, after the Go, .NET and Rust ports: `easyssf-core`
   (the vocabulary), `easyssf-receiver` (the asyncio receiver), `easyssf-test` (the in-process test
   transmitter) and the conformance harness on testcontainers-python.
 - `easyssf-receiver-fastapi` (`easyssf.fastapi`): the push endpoint as an `APIRouter`

@@ -1,6 +1,6 @@
 [project]
 name = "easyssf-receiver"
-version = "0.6.0"
+version = "0.7.0"
 description = "An SSF receiver for Python, framework independent: SET verification, push and poll delivery, stream management, typed CAEP, RISC and SCIM handlers, token revocation and session termination"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +16,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "easyssf-core>=0.6,<0.7",
+    "easyssf-core>=0.7,<0.8",
     "joserfc>=1.7,<2",
     "httpx>=0.28,<1",
 ]

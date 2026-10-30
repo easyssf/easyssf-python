@@ -1,12 +1,12 @@
 [project]
 name = "example-fastapi-resource-server"
-version = "0.6.0"
+version = "0.7.0"
 description = "An OAuth2 resource server on FastAPI that rejects access tokens once their Keycloak session was revoked; the port of the Spring Boot example, not published"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 dependencies = [
-    "easyssf-receiver>=0.6,<0.7",
-    "easyssf-receiver-fastapi>=0.6,<0.7",
+    "easyssf-receiver>=0.7,<0.8",
+    "easyssf-receiver-fastapi>=0.7,<0.8",
     "fastapi>=0.115,<1",
     "uvicorn>=0.34",
     "joserfc>=1.7,<2",

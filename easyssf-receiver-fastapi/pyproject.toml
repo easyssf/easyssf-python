@@ -1,6 +1,6 @@
 [project]
 name = "easyssf-receiver-fastapi"
-version = "0.6.0"
+version = "0.7.0"
 description = "The easyssf SSF receiver for FastAPI: the push endpoint, the rejection of revoked access tokens and the receiver's lifecycle"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,7 +17,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "easyssf-receiver>=0.6,<0.7",
+    "easyssf-receiver>=0.7,<0.8",
     "fastapi>=0.115,<1",
 ]
 

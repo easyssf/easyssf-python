@@ -1,14 +1,14 @@
 [project]
 name = "easyssf-conformance"
-version = "0.6.0"
+version = "0.7.0"
 description = "Runs the OpenID conformance suite's SSF receiver test plans against easyssf-receiver, with the suite started by testcontainers; not published"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 dependencies = [
-    "easyssf-core>=0.6,<0.7",
-    "easyssf-receiver>=0.6,<0.7",
-    "easyssf-test>=0.6,<0.7",
+    "easyssf-core>=0.7,<0.8",
+    "easyssf-receiver>=0.7,<0.8",
+    "easyssf-test>=0.7,<0.8",
     "httpx>=0.28,<1",
     "testcontainers>=4.15,<5",
     "uvicorn>=0.34",

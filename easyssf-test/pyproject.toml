@@ -1,6 +1,6 @@
 [project]
 name = "easyssf-test"
-version = "0.6.0"
+version = "0.7.0"
 description = "A test transmitter for SSF receivers: signs SETs, serves metadata and a JWK Set, issues tokens, emulates stream management and the poll endpoint, in-process through an httpx transport"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,7 +17,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "easyssf-core[signing]>=0.6,<0.7",
+    "easyssf-core[signing]>=0.7,<0.8",
     "joserfc>=1.7,<2",
     "httpx>=0.28,<1",
 ]

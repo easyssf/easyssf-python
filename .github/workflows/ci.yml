@@ -63,7 +63,7 @@ jobs:
       # no checkout and no workspace: the published distributions have to resolve each other and
       # their dependencies from the index and the wheels alone
       - run: uv venv --python 3.11 clean
-      - run: uv pip install --python clean --find-links dist --no-build "easyssf-receiver-fastapi==0.6.0" "easyssf-test==0.6.0"
+      - run: uv pip install --python clean --find-links dist --no-build "easyssf-receiver-fastapi==0.7.0" "easyssf-test==0.7.0"
       - run: uv pip list --python clean | grep easyssf
       - run: |
           clean/bin/python - <<'EOF'
