@@ -49,17 +49,15 @@ Version 0.7.0 is at feature parity with [easyssf 0.7.0 for Java](https://github.
 the version follows the Java library, and below 1.0 a release may break the API when the
 CHANGELOG says so. Python 3.11 or later, Apache-2.0.
 
-## Distributions
+## Modules
 
 One `uv` workspace, one `easyssf` namespace:
 
-| Distribution | Import | Holds |
+| Module | Import | Holds |
 |---|---|---|
 | `easyssf-core` | `easyssf.core` | The vocabulary: SETs (`EventToken`, the `new_set` builder), subjects, delivery methods, stream configuration, transmitter metadata; `easyssf.core.event_types` the event type URIs with aliases; `easyssf.core.caep`, `.risc`, `.scim` the typed events; `easyssf.core.signing` signs SETs (`easyssf-core[signing]`) |
 | `easyssf-receiver` | `easyssf.receiver` | The receiver: verification, de-duplication with a lease, push and poll, stream management, typed handlers, token revocation, session termination, metrics; `ReceiverConfig` and `Receiver`, which assembles a receiver from it; `PushHandler`, mounted on any framework with `easyssf.receiver.asgi.push_app` or `easyssf.receiver.wsgi.push_wsgi_app`; `RevocationMiddleware` |
-| `easyssf-receiver-sqlalchemy` (planned) | `easyssf.sqlalchemy` | The three tables shared with Java, Go, .NET and Rust, on SQLAlchemy 2 |
 | `easyssf-receiver-fastapi` | `easyssf.fastapi` | The push endpoint as an `APIRouter` (`push_router_for`), the rejection of revoked access tokens as a dependency (`revocation_dependency`) or middleware, the receiver's lifecycle as a lifespan (`receiver_lifespan`), its health as a route (`health_router`), see [FastAPI](#fastapi) |
-| `easyssf-receiver-litestar`, `-flask` (planned) | `easyssf.litestar`, `.flask` | The push route, the revocation middleware or guard and the lifecycle of each framework |
 | `easyssf-test` | `easyssf.testing` | `TestTransmitter`: signs SETs, serves metadata and the JWK Set, issues tokens, emulates stream management and the poll endpoint, in-process through the `httpx.AsyncClient` it hands out, no socket involved |
 | `conformance/` (not published) | `easyssf.conformance` | Runs the OpenID conformance suite's SSF receiver test plans against the receiver, with the suite started by testcontainers-python, see [Conformance](#conformance) |
 
