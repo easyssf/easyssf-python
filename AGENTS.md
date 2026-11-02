@@ -185,6 +185,40 @@ Not included, on purpose, as in the other ports: a transmitter, an OpenTelemetry
 implementation, session store integrations beyond `SessionTerminator` and `subject_matches`.
 Subject formats that RFC 9493 dropped (`jwt_id`, `saml_assertion_id`) are not supported.
 
+## Releasing
+
+Releases go to [PyPI](https://pypi.org): the four libraries `easyssf-core`, `easyssf-receiver`,
+`easyssf-test` and `easyssf-receiver-fastapi`, always together and at one version.
+`easyssf-conformance` and `example-fastapi-resource-server` carry the classifier
+`Private :: Do Not Upload`, so PyPI refuses them even if uploaded by mistake. `release.yml` runs on
+a pushed tag `v<version>`. It checks that the tag matches the version of every member of the
+workspace and takes the release notes from the `CHANGELOG.md` section of that version. It then
+tests, lints, builds the four, checks that there is a wheel and an sdist of each at that version
+(`twine check --strict`), and installs the wheels in a clean environment. The `publish` job
+uploads them, and the `github-release` job creates the GitHub release with the files attached,
+marked as a prerelease when the version has a label (`0.8.0rc1`).
+
+The upload uses [trusted publishing](https://docs.pypi.org/trusted-publishers/): no API token is
+stored. Only the `publish` job has `id-token: write`, and it runs in the GitHub environment `pypi`.
+`pypa/gh-action-pypi-publish` exchanges the job's OIDC token for a short-lived PyPI token and
+uploads with digital attestations (PEP 740). Each of the four projects on PyPI has a trusted
+publisher that names owner `easyssf`, repository `easyssf-python`, workflow `release.yml` and
+environment `pypi`. Before a project's first release, it is a "pending publisher" in the PyPI
+account (Your projects, Publishing). The first upload creates the project and turns it into a
+regular publisher. A required reviewer on the `pypi` environment holds a release until approved.
+
+A release goes through a commit like every other change:
+
+1. Set the version in every `pyproject.toml`, and the pins between the members if the minor
+   version changes, then `uv lock`.
+2. Turn the `Unreleased` section of the changelog into `## [<version>] - <date>`.
+3. Push and let CI pass, then push the tag on that commit (`git tag v<version> && git push origin
+   v<version>`) and watch the workflow.
+
+A rerun after a partial upload is safe: `skip-existing` leaves the files already on PyPI alone.
+PyPI never accepts a file name twice, so a broken release is fixed with a new version, not a
+re-upload.
+
 ## Documentation that changes with the code
 
 - `README.md` is the user document. A new setting, alias, subject format or handler is documented
