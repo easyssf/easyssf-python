@@ -220,6 +220,11 @@ A release goes through a commit like every other change:
 3. Push and let CI pass, then push the tag on that commit (`git tag v<version> && git push origin
    v<version>`) and watch the workflow.
 
+After a release, `main` starts the next version as a development version, as Java's
+`0.8.0-SNAPSHOT` and .NET's `0.8.0-alpha.1` do: `version = "0.8.0.dev0"` everywhere, the pins at
+`>=0.8.0.dev0,<0.9` (`<0.8` would exclude it), and the version `ci.yml` installs, then `uv lock`.
+The release sets them to `0.8.0` and `>=0.8,<0.9`.
+
 A rerun after a partial upload is safe: `skip-existing` leaves the files already on PyPI alone.
 PyPI never accepts a file name twice, so a broken release is fixed with a new version, not a
 re-upload.
