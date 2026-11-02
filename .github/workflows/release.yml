@@ -1,0 +1,165 @@
+# Publishes a release to PyPI and creates the GitHub release. Triggered by pushing a tag
+# "v<version>" whose version matches the version of every member of the workspace, see "Releasing"
+# in AGENTS.md.
+#
+# The distributions are the four libraries easyssf-core, easyssf-receiver, easyssf-test and
+# easyssf-receiver-fastapi (the conformance harness and the examples carry the classifier
+# "Private :: Do Not Upload" and are not built here), built once, tested, checked, and uploaded
+# with trusted publishing: no stored API token, the publish job's GitHub OIDC token is exchanged
+# for a PyPI token that lives a quarter of an hour. The trusted publisher of each of the four
+# projects on PyPI names this repository, this workflow file and the environment "pypi". Only the
+# publish job may request the OIDC token, as PyPI recommends; it runs no code of the repository.
+name: Release
+# a tag push carries no commit for GitHub to title the run with, so name it by the tag
+run-name: Release ${{ github.ref_name }}
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+env:
+  DISTRIBUTIONS: easyssf-core easyssf-receiver easyssf-test easyssf-receiver-fastapi
+
+jobs:
+  build:
+    name: Build, test and check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.2
+
+      - name: Check that the tag matches the version of every member
+        # the members pin each other at the minor version, so all of them move together
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          echo "tag: $GITHUB_REF_NAME"
+          status=0
+          for pyproject in pyproject.toml */pyproject.toml examples/*/*/pyproject.toml; do
+            member=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$pyproject")
+            echo "$pyproject: $member"
+            if [ "$member" != "$version" ]; then
+              echo "::error file=$pyproject::version $member does not match tag $GITHUB_REF_NAME"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Take the release notes from the changelog
+        # the section of this version, without its heading, up to the next version heading; the
+        # workflow fails without it so that no release goes out undocumented
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          awk -v v="$version" '
+            /^## \[/ { in_section = (index($0, "## [" v "]") == 1) ; next }
+            in_section && !/^\[/ { print }
+          ' CHANGELOG.md | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+          cat notes.md
+
+      - run: uv sync --all-packages --locked
+      - run: uv run pytest -q
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+      - name: Build
+        run: |
+          for distribution in $DISTRIBUTIONS; do
+            uv build --package "$distribution" --out-dir dist
+          done
+
+      - name: Check the distributions
+        # a wheel and an sdist of each of the four, at the version of the tag, with metadata PyPI
+        # renders
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          ls -l dist
+          for distribution in $DISTRIBUTIONS; do
+            name=${distribution//-/_}
+            for file in "dist/$name-$version-py3-none-any.whl" "dist/$name-$version.tar.gz"; do
+              if [ ! -f "$file" ]; then
+                echo "::error::$file is missing"
+                exit 1
+              fi
+            done
+          done
+          count=$(find dist -type f ! -name '.*' | wc -l)
+          if [ "$count" -ne 8 ]; then
+            echo "::error::expected 8 files, found $count"
+            exit 1
+          fi
+          uvx twine check --strict dist/*
+
+      - name: Install the wheels in a clean environment
+        # the published distributions have to resolve each other and their dependencies from the
+        # index and the wheels alone
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          uv venv --python 3.11 "$RUNNER_TEMP/clean"
+          uv pip install --python "$RUNNER_TEMP/clean" --find-links dist --no-build \
+            "easyssf-receiver-fastapi==$version" "easyssf-test==$version"
+          "$RUNNER_TEMP/clean/bin/python" -c "import easyssf.core, easyssf.receiver, easyssf.testing, easyssf.fastapi"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: notes
+          path: notes.md
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # the GitHub environment the trusted publishers name, and where a required reviewer can be set
+    environment:
+      name: pypi
+      url: https://pypi.org/project/easyssf-receiver/
+    permissions:
+      # the OIDC token that trusted publishing exchanges for the PyPI token
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist
+      - name: Upload to PyPI
+        # with digital attestations (PEP 740); skip-existing makes a rerun after a partial upload
+        # idempotent, PyPI refuses to replace a file it has
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+  github-release:
+    name: Create the GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: .
+      - name: Create the GitHub release
+        # a version with a prerelease label (0.8.0rc1, 0.8.0a1) is marked as a prerelease
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          prerelease=
+          case "$version" in *a*|*b*|*rc*|*dev*) prerelease=--prerelease ;; esac
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag $prerelease \
+            --notes-file notes/notes.md --title "$version" dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}

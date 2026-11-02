@@ -5,6 +5,7 @@ description = "Runs the OpenID conformance suite's SSF receiver test plans again
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
+classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "easyssf-core>=0.7,<0.8",
     "easyssf-receiver>=0.7,<0.8",
