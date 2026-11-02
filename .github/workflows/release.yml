@@ -5,10 +5,11 @@
 # The distributions are the four libraries easyssf-core, easyssf-receiver, easyssf-test and
 # easyssf-receiver-fastapi (the conformance harness and the examples carry the classifier
 # "Private :: Do Not Upload" and are not built here), built once, tested, checked, and uploaded
-# with trusted publishing: no stored API token, the publish job's GitHub OIDC token is exchanged
-# for a PyPI token that lives a quarter of an hour. The trusted publisher of each of the four
-# projects on PyPI names this repository, this workflow file and the environment "pypi". Only the
-# publish job may request the OIDC token, as PyPI recommends; it runs no code of the repository.
+# with trusted publishing: no stored API token, each publish job's GitHub OIDC token is exchanged
+# for a PyPI token that lives a quarter of an hour and reaches its one project. The trusted
+# publisher of each of the four projects on PyPI names this repository, this workflow file and the
+# environment "pypi-<distribution>". Only the publish jobs may request the OIDC token, as PyPI
+# recommends; they run no code of the repository.
 name: Release
 # a tag push carries no commit for GitHub to title the run with, so name it by the tag
 run-name: Release ${{ github.ref_name }}
@@ -119,14 +120,22 @@ jobs:
           path: notes.md
 
   publish:
-    name: Publish to PyPI
+    name: Publish ${{ matrix.distribution }} to PyPI
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # the GitHub environment the trusted publishers name, and where a required reviewer can be set
+    strategy:
+      # one upload that fails (a project without its trusted publisher yet) leaves the others be;
+      # "Re-run failed jobs" retries it and then creates the GitHub release
+      fail-fast: false
+      matrix:
+        # the DISTRIBUTIONS of the build job; the env context is not available to a matrix
+        distribution: [easyssf-core, easyssf-receiver, easyssf-test, easyssf-receiver-fastapi]
+    # one GitHub environment per distribution, which its trusted publisher names: PyPI accepts a
+    # pending publisher only once per owner, repository, workflow and environment
     environment:
-      name: pypi
-      url: https://pypi.org/project/easyssf-receiver/
+      name: pypi-${{ matrix.distribution }}
+      url: https://pypi.org/project/${{ matrix.distribution }}/
     permissions:
       # the OIDC token that trusted publishing exchanges for the PyPI token
       id-token: write
@@ -135,11 +144,22 @@ jobs:
         with:
           name: dist
           path: dist
+      - name: Select the files of the distribution
+        # the version in the pattern keeps easyssf_receiver- from matching easyssf_receiver_fastapi-
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          name=${DISTRIBUTION//-/_}
+          mkdir upload
+          mv "dist/$name-$version-py3-none-any.whl" "dist/$name-$version.tar.gz" upload/
+          ls -l upload
+        env:
+          DISTRIBUTION: ${{ matrix.distribution }}
       - name: Upload to PyPI
         # with digital attestations (PEP 740); skip-existing makes a rerun after a partial upload
         # idempotent, PyPI refuses to replace a file it has
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          packages-dir: upload/
           skip-existing: true
 
   github-release:
